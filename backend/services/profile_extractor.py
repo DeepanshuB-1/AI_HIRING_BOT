@@ -1,4 +1,5 @@
 from .ollama_client import ollama_chat, ANALYSIS_MODEL
+from .embedder import embed_text
 
 
 def extract_profile(resume_text: str) -> dict:
@@ -35,3 +36,25 @@ Resume:
 {resume_text}
 """
     return ollama_chat(prompt, model=ANALYSIS_MODEL, expect_json=True)
+
+
+def _build_profile_summary(profile: dict) -> str:
+    """Compact text representation for embedding (keeps key signal dense)."""
+    skills = ", ".join(profile.get("skills", [])[:20])
+    roles = " | ".join(
+        f"{r.get('title', '')} at {r.get('company', '')}"
+        for r in profile.get("roles", [])[:5]
+    )
+    edu = " | ".join(
+        f"{e.get('degree', '')} {e.get('institution', '')}"
+        for e in profile.get("education", [])[:3]
+    )
+    return f"Skills: {skills}. Experience: {roles}. Education: {edu}."
+
+
+def extract_profile_with_embedding(resume_text: str) -> tuple[dict, list[float]]:
+    """Layer 2 + embedding: returns (profile_dict, 768-dim profile_embedding)."""
+    profile = extract_profile(resume_text)
+    summary = _build_profile_summary(profile)
+    embedding = embed_text(summary)
+    return profile, embedding

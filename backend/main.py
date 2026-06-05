@@ -8,6 +8,7 @@ from backend.config import settings
 from backend.database import create_tables
 from backend.redis_client import ping_redis
 from backend.routers import hr
+import backend.models  # noqa: F401 — ensures all tables are registered before create_all()
 
 
 @asynccontextmanager

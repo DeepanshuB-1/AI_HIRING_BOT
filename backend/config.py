@@ -7,6 +7,14 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_analysis_model: str = "llama3.1:8b"
     ollama_interview_model: str = "mistral:7b"
+    ollama_embed_model: str = "nomic-embed-text"
+    ollama_embed_dims: int = 768
+
+    # pgvector scoring weights
+    vector_similarity_weight: float = 0.40
+    llm_score_weight: float = 0.60
+    duplicate_threshold: float = 0.97
+    question_dedup_threshold: float = 0.90
 
     # Database
     database_url: str = "postgresql+asyncpg://user:pass@localhost/hiringbot"

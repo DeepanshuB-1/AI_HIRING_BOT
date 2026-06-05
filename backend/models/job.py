@@ -3,6 +3,7 @@ from datetime import datetime
 from sqlalchemy import String, Integer, Text, DateTime
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
+from pgvector.sqlalchemy import Vector
 from backend.database import Base
 
 
@@ -20,3 +21,6 @@ class Job(Base):
     pinned_questions: Mapped[list | None] = mapped_column(JSONB)
     ollama_model_override: Mapped[str | None] = mapped_column(String(50))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # pgvector column (Layer 1.5)
+    jd_embedding: Mapped[list | None] = mapped_column(Vector(768))

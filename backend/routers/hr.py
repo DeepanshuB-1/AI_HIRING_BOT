@@ -1,9 +1,9 @@
 import uuid
 import shutil
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from backend.database import get_db
 from backend.config import settings
@@ -11,7 +11,13 @@ from backend.models.candidate import Candidate, CandidateStatus
 from backend.models.job import Job
 from backend.schemas.candidate import CandidateCreate, CandidateOut, CandidateDetail
 from backend.schemas.job import JobCreate, JobOut, JobDetail
-from backend.tasks import run_profile_extraction, run_jd_scoring, run_question_gen
+from backend.schemas.search import CandidateSearchResult
+from backend.tasks import (
+    run_profile_extraction,
+    run_embedding_layer,
+    run_jd_scoring,
+    run_question_gen,
+)
 
 router = APIRouter(prefix="/hr", tags=["HR Admin"])
 
@@ -40,7 +46,28 @@ async def get_job(job_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     return job
 
 
-# ── Candidates ────────────────────────────────────────────────────────────────
+# ── Candidates: upload + list ────────────────────────────────────────────────
+
+async def _check_duplicate(resume_vec: list[float], db: AsyncSession) -> dict | None:
+    """Return the most similar existing candidate if above DUPLICATE_THRESHOLD."""
+    from backend.services.embedder import vec_to_str
+    vec_str = vec_to_str(resume_vec)
+    result = await db.execute(
+        text("""
+            SELECT id, name, email,
+                   1 - (resume_embedding <=> CAST(:vec AS vector)) AS similarity
+            FROM candidates
+            WHERE resume_embedding IS NOT NULL
+            ORDER BY resume_embedding <=> CAST(:vec AS vector)
+            LIMIT 1
+        """),
+        {"vec": vec_str},
+    )
+    row = result.fetchone()
+    if row and row.similarity >= settings.duplicate_threshold:
+        return {"id": str(row.id), "name": row.name, "email": row.email, "similarity": row.similarity}
+    return None
+
 
 @router.post("/candidates/upload", response_model=CandidateOut, status_code=201)
 async def upload_candidate(
@@ -52,18 +79,15 @@ async def upload_candidate(
     resume: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upload a candidate resume — triggers Layers 1-3 in background via Celery."""
-    # validate file type
+    """Upload a candidate resume — triggers Layers 1 → 1.5 → 3 → 4 via Celery."""
     suffix = Path(resume.filename).suffix.lower()
     if suffix not in (".pdf", ".docx", ".txt"):
         raise HTTPException(status_code=400, detail="Resume must be PDF, DOCX, or TXT")
 
-    # check job exists
     job = await db.get(Job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    # save file
     upload_path = Path(settings.upload_dir)
     upload_path.mkdir(parents=True, exist_ok=True)
     file_name = f"{uuid.uuid4()}{suffix}"
@@ -71,7 +95,24 @@ async def upload_candidate(
     with file_path.open("wb") as f:
         shutil.copyfileobj(resume.file, f)
 
-    # create candidate record
+    # quick duplicate check (best-effort — skip if embedding fails)
+    try:
+        from backend.services.resume_parser import extract_resume_text
+        from backend.services.embedder import embed_text
+        resume_text = extract_resume_text(str(file_path))
+        resume_vec = embed_text(resume_text)
+        dup = await _check_duplicate(resume_vec, db)
+        if dup:
+            file_path.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=409,
+                detail=f"Duplicate detected — {dup['similarity']*100:.1f}% similar to {dup['name']} ({dup['email']})",
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
     candidate = Candidate(
         name=name,
         email=email,
@@ -84,13 +125,15 @@ async def upload_candidate(
     db.add(candidate)
     await db.flush()
 
-    candidate_id = str(candidate.id)
+    cid = str(candidate.id)
+    jid = str(job_id)
 
-    # kick off background pipeline: Layer 1+2 → then Layer 3
+    # pipeline: Layer 1+2 → Layer 1.5 → Layer 3 → Layer 4
     chain = (
-        run_profile_extraction.si(candidate_id, str(file_path))
-        | run_jd_scoring.si(candidate_id, job.jd_text)
-        | run_question_gen.si(candidate_id, job.jd_text)
+        run_profile_extraction.si(cid, str(file_path))
+        | run_embedding_layer.si(cid, str(file_path), jid, job.jd_text)
+        | run_jd_scoring.si(cid, job.jd_text)
+        | run_question_gen.si(cid, jid, job.jd_text)
     )
     chain.delay()
 
@@ -109,6 +152,167 @@ async def list_candidates(
     return result.scalars().all()
 
 
+# ── pgvector-powered search endpoints (MUST come before /{candidate_id}) ─────
+
+@router.get("/candidates/semantic-search", response_model=list[CandidateSearchResult])
+async def semantic_search(
+    query: str = Query(..., description="Natural language query to search candidates"),
+    limit: int = Query(10, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+):
+    """Embed the query and return candidates ranked by cosine similarity."""
+    from backend.services.embedder import embed_text, vec_to_str
+    query_vec = embed_text(query)
+    vec_str = vec_to_str(query_vec)
+
+    result = await db.execute(
+        text("""
+            SELECT id, name, email, phone, match_score, quick_match_score, status,
+                   1 - (resume_embedding <=> CAST(:vec AS vector)) AS similarity_score
+            FROM candidates
+            WHERE resume_embedding IS NOT NULL
+            ORDER BY resume_embedding <=> CAST(:vec AS vector)
+            LIMIT :limit
+        """),
+        {"vec": vec_str, "limit": limit},
+    )
+    rows = result.fetchall()
+    return [
+        CandidateSearchResult(
+            id=row.id,
+            name=row.name,
+            email=row.email,
+            phone=row.phone,
+            match_score=row.match_score,
+            quick_match_score=row.quick_match_score,
+            similarity_score=round(float(row.similarity_score), 4),
+            status=row.status,
+        )
+        for row in rows
+    ]
+
+
+@router.get("/candidates/similar-to-hires", response_model=list[CandidateSearchResult])
+async def similar_to_hires(
+    job_id: uuid.UUID | None = Query(None),
+    limit: int = Query(10, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+):
+    """Find pending/reviewed candidates most similar to previously hired candidates."""
+    hire_filter = "AND c_hire.jd_id = CAST(:job_id AS uuid)" if job_id else ""
+    params: dict = {"limit": limit}
+    if job_id:
+        params["job_id"] = str(job_id)
+
+    result = await db.execute(
+        text(f"""
+            WITH hire_centroid AS (
+                SELECT AVG(resume_embedding) AS avg_vec
+                FROM candidates c_hire
+                WHERE c_hire.status = 'completed'
+                  AND c_hire.resume_embedding IS NOT NULL
+                  {hire_filter}
+            )
+            SELECT c.id, c.name, c.email, c.phone, c.match_score, c.quick_match_score, c.status,
+                   1 - (c.resume_embedding <=> hc.avg_vec) AS similarity_score
+            FROM candidates c, hire_centroid hc
+            WHERE c.status IN ('pending', 'pending_review', 'analyzed')
+              AND c.resume_embedding IS NOT NULL
+              AND hc.avg_vec IS NOT NULL
+            ORDER BY c.resume_embedding <=> hc.avg_vec
+            LIMIT :limit
+        """),
+        params,
+    )
+    rows = result.fetchall()
+    return [
+        CandidateSearchResult(
+            id=row.id,
+            name=row.name,
+            email=row.email,
+            phone=row.phone,
+            match_score=row.match_score,
+            quick_match_score=row.quick_match_score,
+            similarity_score=round(float(row.similarity_score), 4),
+            status=row.status,
+        )
+        for row in rows
+    ]
+
+
+@router.get("/candidates/cluster")
+async def cluster_candidates(
+    job_id: uuid.UUID = Query(..., description="Job ID to cluster candidates for"),
+    n_clusters: int = Query(3, ge=2, le=8),
+    db: AsyncSession = Depends(get_db),
+):
+    """K-means clustering of candidates by resume embedding (stdlib only, no ML deps)."""
+    result = await db.execute(
+        text("""
+            SELECT id, name, resume_embedding
+            FROM candidates
+            WHERE jd_id = CAST(:jid AS uuid)
+              AND resume_embedding IS NOT NULL
+        """),
+        {"jid": str(job_id)},
+    )
+    rows = result.fetchall()
+    if not rows:
+        return {"clusters": [], "message": "No candidates with embeddings for this job"}
+
+    import random
+    import math
+
+    ids = [str(row.id) for row in rows]
+    names = [row.name for row in rows]
+    vecs = [list(row.resume_embedding) for row in rows]
+
+    def _dist(a: list[float], b: list[float]) -> float:
+        return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
+
+    k = min(n_clusters, len(vecs))
+    centroids = [vecs[random.randrange(len(vecs))]]
+    while len(centroids) < k:
+        dists = [min(_dist(v, c) for c in centroids) ** 2 for v in vecs]
+        total = sum(dists)
+        rnd = random.random() * total
+        cumulative = 0.0
+        for i, d in enumerate(dists):
+            cumulative += d
+            if cumulative >= rnd:
+                centroids.append(vecs[i])
+                break
+
+    for _ in range(20):
+        assignments = [min(range(k), key=lambda ci: _dist(v, centroids[ci])) for v in vecs]
+        new_centroids = []
+        for ci in range(k):
+            cluster_vecs = [vecs[i] for i, a in enumerate(assignments) if a == ci]
+            if cluster_vecs:
+                dim = len(cluster_vecs[0])
+                new_centroids.append([sum(v[d] for v in cluster_vecs) / len(cluster_vecs) for d in range(dim)])
+            else:
+                new_centroids.append(centroids[ci])
+        if new_centroids == centroids:
+            break
+        centroids = new_centroids
+
+    clusters = [
+        {
+            "cluster_id": ci,
+            "size": assignments.count(ci),
+            "candidate_ids": [ids[i] for i, a in enumerate(assignments) if a == ci],
+            "candidate_names": [names[i] for i, a in enumerate(assignments) if a == ci],
+        }
+        for ci in range(k)
+        if assignments.count(ci) > 0
+    ]
+
+    return {"job_id": str(job_id), "n_clusters": k, "clusters": clusters}
+
+
+# ── Per-candidate endpoints (parameterised — must come AFTER specific paths) ──
+
 @router.get("/candidates/{candidate_id}", response_model=CandidateDetail)
 async def get_candidate(candidate_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     candidate = await db.get(Candidate, candidate_id)
@@ -123,3 +327,47 @@ async def delete_candidate(candidate_id: uuid.UUID, db: AsyncSession = Depends(g
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
     await db.delete(candidate)
+
+
+@router.get("/candidates/{candidate_id}/similar", response_model=list[CandidateSearchResult])
+async def find_similar_candidates(
+    candidate_id: uuid.UUID,
+    limit: int = Query(5, ge=1, le=20),
+    db: AsyncSession = Depends(get_db),
+):
+    """Find top-N candidates with the most similar resume to the given candidate."""
+    candidate = await db.get(Candidate, candidate_id)
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    if candidate.resume_embedding is None:
+        raise HTTPException(status_code=422, detail="Candidate has no resume embedding yet")
+
+    from backend.services.embedder import vec_to_str
+    vec_str = vec_to_str(candidate.resume_embedding)
+
+    result = await db.execute(
+        text("""
+            SELECT id, name, email, phone, match_score, quick_match_score, status,
+                   1 - (resume_embedding <=> CAST(:vec AS vector)) AS similarity_score
+            FROM candidates
+            WHERE resume_embedding IS NOT NULL
+              AND id != CAST(:cid AS uuid)
+            ORDER BY resume_embedding <=> CAST(:vec AS vector)
+            LIMIT :limit
+        """),
+        {"vec": vec_str, "cid": str(candidate_id), "limit": limit},
+    )
+    rows = result.fetchall()
+    return [
+        CandidateSearchResult(
+            id=row.id,
+            name=row.name,
+            email=row.email,
+            phone=row.phone,
+            match_score=row.match_score,
+            quick_match_score=row.quick_match_score,
+            similarity_score=round(float(row.similarity_score), 4),
+            status=row.status,
+        )
+        for row in rows
+    ]

@@ -6,24 +6,25 @@ logger = logging.getLogger(__name__)
 
 @celery.task(name="backend.tasks.run_profile_extraction", bind=True, max_retries=2)
 def run_profile_extraction(self, candidate_id: str, resume_path: str):
-    """Layer 1+2: Parse resume and extract structured profile via llama3.1:8b."""
+    """Layer 1+2: Parse resume, extract structured profile, store profile_embedding."""
     try:
         from .services.resume_parser import extract_resume_text
-        from .services.profile_extractor import extract_profile
+        from .services.profile_extractor import extract_profile_with_embedding
         import asyncio
         from .database import AsyncSessionLocal
         from .models.candidate import Candidate
         import uuid
 
         text = extract_resume_text(resume_path)
-        profile = extract_profile(text)
+        profile, profile_embedding = extract_profile_with_embedding(text)
 
         async def _save():
             async with AsyncSessionLocal() as db:
-                result = await db.get(Candidate, uuid.UUID(candidate_id))
-                if result:
-                    result.profile_json = profile
-                    result.status = "analyzed"
+                candidate = await db.get(Candidate, uuid.UUID(candidate_id))
+                if candidate:
+                    candidate.profile_json = profile
+                    candidate.profile_embedding = profile_embedding
+                    candidate.status = "analyzed"
                     await db.commit()
 
         asyncio.run(_save())
@@ -34,11 +35,36 @@ def run_profile_extraction(self, candidate_id: str, resume_path: str):
         raise self.retry(exc=exc, countdown=10)
 
 
+@celery.task(name="backend.tasks.run_embedding_layer", bind=True, max_retries=2)
+def run_embedding_layer(self, candidate_id: str, resume_path: str, jd_id: str, jd_text: str):
+    """Layer 1.5: Generate resume + JD embeddings, store in pgvector."""
+    try:
+        from .services.resume_parser import extract_resume_text
+        from .services.embedding_layer import generate_and_store_embeddings
+        import asyncio
+        from .database import AsyncSessionLocal
+
+        resume_text = extract_resume_text(resume_path)
+
+        async def _embed():
+            async with AsyncSessionLocal() as db:
+                score = await generate_and_store_embeddings(
+                    candidate_id, resume_text, jd_id, jd_text, db
+                )
+                return score
+
+        quick_score = asyncio.run(_embed())
+        logger.info(f"Embeddings stored for candidate {candidate_id} — quick score: {quick_score}")
+        return {"status": "ok", "quick_score": quick_score}
+    except Exception as exc:
+        logger.error(f"Embedding layer failed: {exc}")
+        raise self.retry(exc=exc, countdown=10)
+
+
 @celery.task(name="backend.tasks.run_jd_scoring", bind=True, max_retries=2)
 def run_jd_scoring(self, candidate_id: str, jd_text: str):
-    """Layer 3: Score candidate profile against JD via llama3.1:8b."""
+    """Layer 3: Two-stage scoring — pgvector cosine (40%) + LLM (60%)."""
     try:
-        from .services.jd_matcher import score_candidate
         import asyncio
         from .database import AsyncSessionLocal
         from .models.candidate import Candidate
@@ -50,11 +76,14 @@ def run_jd_scoring(self, candidate_id: str, jd_text: str):
                 if not candidate or not candidate.profile_json:
                     raise ValueError(f"Candidate {candidate_id} has no profile yet")
 
-                scores = score_candidate(candidate.profile_json, jd_text)
+                from .services.jd_matcher import score_candidate_v2, should_proceed
+                scores = await score_candidate_v2(candidate_id, candidate.profile_json, jd_text, db)
+
                 candidate.match_score = int(scores.get("overall_score", 0))
                 candidate.match_details = scores
+                candidate.vector_score = scores.get("vector_score")
+                candidate.llm_score = scores.get("llm_score")
 
-                from .services.jd_matcher import should_proceed
                 decision = should_proceed(scores)
                 if decision == "reject":
                     candidate.status = "rejected"
@@ -73,10 +102,9 @@ def run_jd_scoring(self, candidate_id: str, jd_text: str):
 
 
 @celery.task(name="backend.tasks.run_question_gen", bind=True, max_retries=2)
-def run_question_gen(self, candidate_id: str, jd_text: str):
-    """Layer 4: Generate personalised interview questions via llama3.1:8b."""
+def run_question_gen(self, candidate_id: str, jd_id: str, jd_text: str):
+    """Layer 4: Generate personalised questions with pgvector deduplication."""
     try:
-        from .services.question_gen import generate_questions
         import asyncio
         from .database import AsyncSessionLocal
         from .models.candidate import Candidate
@@ -88,7 +116,10 @@ def run_question_gen(self, candidate_id: str, jd_text: str):
                 if not candidate or not candidate.profile_json:
                     raise ValueError(f"Candidate {candidate_id} has no profile")
 
-                questions = generate_questions(candidate.profile_json, jd_text)
+                from .services.question_gen import generate_questions
+                questions = await generate_questions(
+                    candidate.profile_json, jd_text, jd_id, db
+                )
                 candidate.questions_json = questions
                 await db.commit()
                 return questions
@@ -101,10 +132,10 @@ def run_question_gen(self, candidate_id: str, jd_text: str):
 
 @celery.task(name="backend.tasks.run_report_gen", bind=True, max_retries=2)
 def run_report_gen(self, call_sid: str):
-    """Layer 6: Generate post-call score report via llama3.1:8b."""
+    """Layer 6: Generate post-call score report and store report_embedding."""
     try:
         from .voice.call_state import get_state
-        from .services.report_gen import generate_report
+        from .services.report_gen import generate_report_with_embedding
         import asyncio
         from .database import AsyncSessionLocal
         from .models.call import ScreeningCall
@@ -118,7 +149,9 @@ def run_report_gen(self, call_sid: str):
             async with AsyncSessionLocal() as db:
                 call = await db.get(ScreeningCall, uuid.UUID(state["call_id"]))
                 candidate = await db.get(Candidate, call.candidate_id)
-                report_data = generate_report(state, candidate.profile_json or {})
+                report_data, report_embedding = generate_report_with_embedding(
+                    state, candidate.profile_json or {}
+                )
 
                 report = ScoreReport(
                     call_id=call.id,
@@ -134,6 +167,7 @@ def run_report_gen(self, call_sid: str):
                     strengths=report_data.get("strengths", []),
                     next_round_questions=report_data.get("next_round_questions", []),
                     report_model="llama3.1:8b",
+                    report_embedding=report_embedding,
                 )
                 db.add(report)
                 call.status = "completed"
