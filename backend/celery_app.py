@@ -20,6 +20,7 @@ celery.conf.update(
 
 celery.conf.task_routes = {
     "backend.tasks.run_profile_extraction": {"queue": "analysis_queue"},
+    "backend.tasks.run_embedding_layer": {"queue": "analysis_queue"},
     "backend.tasks.run_jd_scoring": {"queue": "analysis_queue"},
     "backend.tasks.run_question_gen": {"queue": "analysis_queue"},
     "backend.tasks.run_report_gen": {"queue": "analysis_queue"},

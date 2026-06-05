@@ -14,7 +14,7 @@ async def score_candidate_v2(
     # Stage 1: pgvector cosine similarity between stored resume and JD embeddings
     vec_result = await db.execute(
         text("""
-            SELECT ROUND((1 - (c.resume_embedding <=> j.jd_embedding)) * 100, 1) AS vector_score
+            SELECT ROUND(CAST((1 - (c.resume_embedding <=> j.jd_embedding)) * 100 AS numeric), 1) AS vector_score
             FROM candidates c
             JOIN jobs j ON j.id = c.jd_id
             WHERE c.id = CAST(:cid AS uuid)

@@ -16,6 +16,7 @@ class CandidateStatus(str, enum.Enum):
     in_call = "in_call"
     completed = "completed"
     rejected = "rejected"
+    failed = "failed"
 
 
 class Candidate(Base):
@@ -42,6 +43,7 @@ class Candidate(Base):
     email: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
     phone: Mapped[str] = mapped_column(String(20), nullable=False)
     resume_url: Mapped[str | None] = mapped_column(Text)
+    resume_text: Mapped[str | None] = mapped_column(Text)
     jd_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     profile_json: Mapped[dict | None] = mapped_column(JSONB)
     match_score: Mapped[int | None] = mapped_column(Integer)

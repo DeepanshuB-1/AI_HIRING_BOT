@@ -75,10 +75,10 @@ async def generate_questions(
         await db.execute(
             text("""
                 INSERT INTO question_bank
-                    (id, jd_id, question_text, question_embedding, question_type, difficulty)
+                    (id, jd_id, question_text, question_embedding, question_type, difficulty, pinned, created_at)
                 VALUES
                     (CAST(:id AS uuid), CAST(:jd_id AS uuid), :text,
-                     CAST(:vec AS vector), CAST(:qtype AS questiontype), CAST(:diff AS difficultylevel))
+                     CAST(:vec AS vector), CAST(:qtype AS questiontype), CAST(:diff AS difficultylevel), false, NOW())
                 ON CONFLICT DO NOTHING
             """),
             {

@@ -13,7 +13,7 @@ pgvector==0.3.2
 # psycopg2-binary — needed for Alembic sync migrations; skip on Python 3.13 until wheel is available
 
 # Task queue
-celery==5.4.0
+celery==5.5.2
 flower==2.0.1
 
 # Ollama

@@ -1,37 +1,86 @@
 from .celery_app import celery
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
+
+
+def _run(coro):
+    """
+    Run an async coroutine in a brand-new event loop.
+    Replaces the module-level SQLAlchemy engine + session with a fresh one
+    so asyncpg doesn't try to use connections from the previous (closed) loop.
+    coro must import AsyncSessionLocal INSIDE the async function body, not from
+    an outer closure — otherwise it captures the old binding.
+    """
+    from . import database as _db
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+
+    new_engine = create_async_engine(_db.engine.url, echo=False, pool_pre_ping=True)
+    _db.engine = new_engine
+    _db.AsyncSessionLocal = async_sessionmaker(
+        new_engine, class_=AsyncSession, expire_on_commit=False
+    )
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        try:
+            loop.run_until_complete(new_engine.dispose())
+        except Exception:
+            pass
+        loop.close()
+
+
+def _mark_failed(candidate_id: str):
+    """Set candidate status to failed (pipeline error) after all retries exhausted."""
+    import uuid
+
+    async def _update():
+        from .database import AsyncSessionLocal
+        from .models.candidate import Candidate, CandidateStatus
+        async with AsyncSessionLocal() as db:
+            candidate = await db.get(Candidate, uuid.UUID(candidate_id))
+            if candidate and candidate.status not in ("rejected", "completed", "failed"):
+                candidate.status = CandidateStatus.failed
+                await db.commit()
+
+    _run(_update())
 
 
 @celery.task(name="backend.tasks.run_profile_extraction", bind=True, max_retries=2)
 def run_profile_extraction(self, candidate_id: str, resume_path: str):
     """Layer 1+2: Parse resume, extract structured profile, store profile_embedding."""
     try:
+        import uuid
         from .services.resume_parser import extract_resume_text
         from .services.profile_extractor import extract_profile_with_embedding
-        import asyncio
-        from .database import AsyncSessionLocal
-        from .models.candidate import Candidate
-        import uuid
 
         text = extract_resume_text(resume_path)
         profile, profile_embedding = extract_profile_with_embedding(text)
 
         async def _save():
+            from .database import AsyncSessionLocal
+            from .models.candidate import Candidate
             async with AsyncSessionLocal() as db:
                 candidate = await db.get(Candidate, uuid.UUID(candidate_id))
                 if candidate:
+                    candidate.resume_text = text
                     candidate.profile_json = profile
                     candidate.profile_embedding = profile_embedding
                     candidate.status = "analyzed"
                     await db.commit()
 
-        asyncio.run(_save())
+        _run(_save())
         logger.info(f"Profile extracted for candidate {candidate_id}")
         return {"status": "ok", "candidate_id": candidate_id}
     except Exception as exc:
         logger.error(f"Profile extraction failed: {exc}")
+        if self.request.retries >= self.max_retries:
+            _mark_failed(candidate_id)
+            return {"status": "failed", "candidate_id": candidate_id}
         raise self.retry(exc=exc, countdown=10)
 
 
@@ -39,25 +88,33 @@ def run_profile_extraction(self, candidate_id: str, resume_path: str):
 def run_embedding_layer(self, candidate_id: str, resume_path: str, jd_id: str, jd_text: str):
     """Layer 1.5: Generate resume + JD embeddings, store in pgvector."""
     try:
+        import uuid
         from .services.resume_parser import extract_resume_text
         from .services.embedding_layer import generate_and_store_embeddings
-        import asyncio
-        from .database import AsyncSessionLocal
-
-        resume_text = extract_resume_text(resume_path)
 
         async def _embed():
+            from .database import AsyncSessionLocal
+            from .models.candidate import Candidate
             async with AsyncSessionLocal() as db:
+                candidate = await db.get(Candidate, uuid.UUID(candidate_id))
+                resume_text = (
+                    candidate.resume_text
+                    if candidate and candidate.resume_text
+                    else extract_resume_text(resume_path)
+                )
                 score = await generate_and_store_embeddings(
                     candidate_id, resume_text, jd_id, jd_text, db
                 )
                 return score
 
-        quick_score = asyncio.run(_embed())
+        quick_score = _run(_embed())
         logger.info(f"Embeddings stored for candidate {candidate_id} — quick score: {quick_score}")
         return {"status": "ok", "quick_score": quick_score}
     except Exception as exc:
         logger.error(f"Embedding layer failed: {exc}")
+        if self.request.retries >= self.max_retries:
+            _mark_failed(candidate_id)
+            return {"status": "failed", "candidate_id": candidate_id}
         raise self.retry(exc=exc, countdown=10)
 
 
@@ -65,18 +122,17 @@ def run_embedding_layer(self, candidate_id: str, resume_path: str, jd_id: str, j
 def run_jd_scoring(self, candidate_id: str, jd_text: str):
     """Layer 3: Two-stage scoring — pgvector cosine (40%) + LLM (60%)."""
     try:
-        import asyncio
-        from .database import AsyncSessionLocal
-        from .models.candidate import Candidate
         import uuid
 
         async def _score():
+            from .database import AsyncSessionLocal
+            from .models.candidate import Candidate
+            from .services.jd_matcher import score_candidate_v2, should_proceed
             async with AsyncSessionLocal() as db:
                 candidate = await db.get(Candidate, uuid.UUID(candidate_id))
                 if not candidate or not candidate.profile_json:
                     raise ValueError(f"Candidate {candidate_id} has no profile yet")
 
-                from .services.jd_matcher import score_candidate_v2, should_proceed
                 scores = await score_candidate_v2(candidate_id, candidate.profile_json, jd_text, db)
 
                 candidate.match_score = int(scores.get("overall_score", 0))
@@ -90,14 +146,17 @@ def run_jd_scoring(self, candidate_id: str, jd_text: str):
                 elif decision == "review":
                     candidate.status = "pending_review"
                 else:
-                    candidate.status = "pending"
+                    candidate.status = "analyzed"
 
                 await db.commit()
                 return scores
 
-        return asyncio.run(_score())
+        return _run(_score())
     except Exception as exc:
         logger.error(f"JD scoring failed: {exc}")
+        if self.request.retries >= self.max_retries:
+            _mark_failed(candidate_id)
+            return {"status": "failed", "candidate_id": candidate_id}
         raise self.retry(exc=exc, countdown=10)
 
 
@@ -105,18 +164,17 @@ def run_jd_scoring(self, candidate_id: str, jd_text: str):
 def run_question_gen(self, candidate_id: str, jd_id: str, jd_text: str):
     """Layer 4: Generate personalised questions with pgvector deduplication."""
     try:
-        import asyncio
-        from .database import AsyncSessionLocal
-        from .models.candidate import Candidate
         import uuid
 
         async def _gen():
+            from .database import AsyncSessionLocal
+            from .models.candidate import Candidate
+            from .services.question_gen import generate_questions
             async with AsyncSessionLocal() as db:
                 candidate = await db.get(Candidate, uuid.UUID(candidate_id))
                 if not candidate or not candidate.profile_json:
                     raise ValueError(f"Candidate {candidate_id} has no profile")
 
-                from .services.question_gen import generate_questions
                 questions = await generate_questions(
                     candidate.profile_json, jd_text, jd_id, db
                 )
@@ -124,9 +182,12 @@ def run_question_gen(self, candidate_id: str, jd_id: str, jd_text: str):
                 await db.commit()
                 return questions
 
-        return asyncio.run(_gen())
+        return _run(_gen())
     except Exception as exc:
         logger.error(f"Question generation failed: {exc}")
+        if self.request.retries >= self.max_retries:
+            _mark_failed(candidate_id)
+            return {"status": "failed", "candidate_id": candidate_id}
         raise self.retry(exc=exc, countdown=10)
 
 
@@ -134,25 +195,23 @@ def run_question_gen(self, candidate_id: str, jd_id: str, jd_text: str):
 def run_report_gen(self, call_sid: str):
     """Layer 6: Generate post-call score report and store report_embedding."""
     try:
+        import uuid
         from .voice.call_state import get_state
         from .services.report_gen import generate_report_with_embedding
-        import asyncio
-        from .database import AsyncSessionLocal
-        from .models.call import ScreeningCall
-        from .models.report import ScoreReport
-        from .models.candidate import Candidate
-        import uuid
 
         state = get_state(call_sid)
 
         async def _save():
+            from .database import AsyncSessionLocal
+            from .models.call import ScreeningCall
+            from .models.report import ScoreReport
+            from .models.candidate import Candidate
             async with AsyncSessionLocal() as db:
                 call = await db.get(ScreeningCall, uuid.UUID(state["call_id"]))
                 candidate = await db.get(Candidate, call.candidate_id)
                 report_data, report_embedding = generate_report_with_embedding(
                     state, candidate.profile_json or {}
                 )
-
                 report = ScoreReport(
                     call_id=call.id,
                     overall_score=int(report_data.get("overall_score", 0)),
@@ -173,7 +232,7 @@ def run_report_gen(self, call_sid: str):
                 call.status = "completed"
                 await db.commit()
 
-        asyncio.run(_save())
+        _run(_save())
         logger.info(f"Report generated for call {call_sid}")
         return {"status": "ok", "call_sid": call_sid}
     except Exception as exc:

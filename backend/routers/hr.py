@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 
 from backend.database import get_db
 from backend.config import settings
@@ -83,6 +84,8 @@ async def upload_candidate(
     suffix = Path(resume.filename).suffix.lower()
     if suffix not in (".pdf", ".docx", ".txt"):
         raise HTTPException(status_code=400, detail="Resume must be PDF, DOCX, or TXT")
+    if resume.size and resume.size > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Resume file too large (max 10 MB)")
 
     job = await db.get(Job, job_id)
     if not job:
@@ -123,7 +126,11 @@ async def upload_candidate(
         status=CandidateStatus.pending,
     )
     db.add(candidate)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        file_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=409, detail=f"A candidate with email {email} already exists")
 
     cid = str(candidate.id)
     jid = str(job_id)
@@ -143,9 +150,16 @@ async def upload_candidate(
 @router.get("/candidates", response_model=list[CandidateOut])
 async def list_candidates(
     status: str | None = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(Candidate).order_by(Candidate.created_at.desc())
+    if status and status not in CandidateStatus.__members__:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status '{status}'. Valid values: {list(CandidateStatus.__members__)}",
+        )
+    query = select(Candidate).order_by(Candidate.created_at.desc()).offset(skip).limit(limit)
     if status:
         query = query.where(Candidate.status == status)
     result = await db.execute(query)
@@ -253,6 +267,8 @@ async def cluster_candidates(
             FROM candidates
             WHERE jd_id = CAST(:jid AS uuid)
               AND resume_embedding IS NOT NULL
+            ORDER BY created_at DESC
+            LIMIT 200
         """),
         {"jid": str(job_id)},
     )
@@ -326,6 +342,8 @@ async def delete_candidate(candidate_id: uuid.UUID, db: AsyncSession = Depends(g
     candidate = await db.get(Candidate, candidate_id)
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
+    if candidate.resume_url:
+        Path(candidate.resume_url).unlink(missing_ok=True)
     await db.delete(candidate)
 
 

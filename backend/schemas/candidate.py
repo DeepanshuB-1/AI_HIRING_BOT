@@ -18,8 +18,10 @@ class CandidateOut(BaseModel):
     name: str
     email: str
     phone: str
+    jd_id: Optional[UUID] = None
     status: CandidateStatus
     match_score: Optional[int] = None
+    quick_match_score: Optional[float] = None
     source: Optional[str] = None
     created_at: datetime
 
@@ -27,7 +29,10 @@ class CandidateOut(BaseModel):
 
 
 class CandidateDetail(CandidateOut):
+    resume_url: Optional[str] = None
     profile_json: Optional[dict] = None
     match_details: Optional[dict] = None
     questions_json: Optional[list] = None
+    vector_score: Optional[float] = None
+    llm_score: Optional[float] = None
     consent_given: bool = False

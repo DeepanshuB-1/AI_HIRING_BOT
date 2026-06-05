@@ -1,7 +1,7 @@
 import uuid
 import enum
 from datetime import datetime
-from sqlalchemy import String, Text, DateTime, Boolean, Enum as SAEnum, Index
+from sqlalchemy import String, Text, DateTime, Boolean, Enum as SAEnum, Index, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from pgvector.sqlalchemy import Vector
@@ -46,4 +46,4 @@ class QuestionBank(Base):
         SAEnum(DifficultyLevel, name="difficultylevel"), default=DifficultyLevel.medium
     )
     pinned: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, server_default=func.now())

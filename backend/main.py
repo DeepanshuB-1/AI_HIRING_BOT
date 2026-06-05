@@ -7,7 +7,7 @@ from pathlib import Path
 from backend.config import settings
 from backend.database import create_tables
 from backend.redis_client import ping_redis
-from backend.routers import hr
+from backend.routers import hr, voice
 import backend.models  # noqa: F401 — ensures all tables are registered before create_all()
 
 
@@ -45,13 +45,23 @@ app.mount("/audio", StaticFiles(directory=str(audio_path)), name="audio")
 
 # routers
 app.include_router(hr.router)
+app.include_router(voice.router)
 
 
 @app.get("/health")
 async def health():
+    import ollama as _ollama
+    try:
+        pulled = [m.model for m in _ollama.list().models]
+        ollama_ok = settings.ollama_analysis_model in pulled
+        ollama_embed_ok = settings.ollama_embed_model in pulled
+    except Exception:
+        ollama_ok = False
+        ollama_embed_ok = False
+
     return {
         "status": "ok",
         "redis": ping_redis(),
-        "ollama_analysis_model": settings.ollama_analysis_model,
-        "ollama_interview_model": settings.ollama_interview_model,
+        "ollama_analysis_model": ollama_ok,
+        "ollama_embed_model": ollama_embed_ok,
     }
