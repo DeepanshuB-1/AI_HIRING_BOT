@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     question_dedup_threshold: float = 0.90
 
     # Database
-    database_url: str = "postgresql+asyncpg://user:pass@localhost/hiringbot"
+    database_url: str = "postgresql+asyncpg://user:pass@localhost:5433/hiringbot"
     redis_url: str = "redis://localhost:6379"
 
     # Twilio

@@ -9,10 +9,12 @@ from backend.database import Base
 
 
 class QuestionType(str, enum.Enum):
+    warmup = "warmup"
     technical = "technical"
     behavioral = "behavioral"
+    resume_probe = "resume_probe"
     situational = "situational"
-    culture = "culture"
+    closing = "closing"
 
 
 class DifficultyLevel(str, enum.Enum):

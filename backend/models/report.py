@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Integer, Text, DateTime, Enum as SAEnum
+from sqlalchemy import String, Integer, Text, DateTime, Enum as SAEnum, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from pgvector.sqlalchemy import Vector
@@ -17,6 +17,15 @@ class AIRecommendation(str, enum.Enum):
 
 class ScoreReport(Base):
     __tablename__ = "score_reports"
+    __table_args__ = (
+        Index(
+            "idx_score_reports_report_embedding_hnsw",
+            "report_embedding",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"report_embedding": "vector_cosine_ops"},
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     call_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)

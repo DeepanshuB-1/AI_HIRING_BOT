@@ -28,6 +28,13 @@ class Candidate(Base):
             postgresql_with={"m": 16, "ef_construction": 64},
             postgresql_ops={"resume_embedding": "vector_cosine_ops"},
         ),
+        Index(
+            "idx_candidates_profile_embedding_hnsw",
+            "profile_embedding",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"profile_embedding": "vector_cosine_ops"},
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

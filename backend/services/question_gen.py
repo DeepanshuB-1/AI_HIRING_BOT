@@ -10,7 +10,14 @@ def _generate_raw_questions(profile: dict, jd_text: str, count: int) -> list[dic
     """LLM-only question generation (no DB, sync)."""
     prompt = f"""You are an expert technical interviewer. Generate {count} interview questions for this candidate.
 Return ONLY a valid JSON array. Each item must have exactly these fields:
-{{"question": "string", "type": "technical|behavioral|situational|culture", "difficulty": "easy|medium|hard"}}
+{{
+  "id": <integer starting at 1>,
+  "type": "warmup|technical|behavioral|resume_probe|situational|closing",
+  "question": "Full question text",
+  "difficulty": "easy|medium|hard",
+  "ideal_answer_points": ["key point 1", "key point 2"],
+  "follow_up": "Follow-up question if the answer is vague"
+}}
 
 Candidate Profile: {profile}
 Job Description: {jd_text}
@@ -59,7 +66,10 @@ async def generate_questions(
         if row and row.similarity >= threshold:
             continue  # too similar to an existing question
 
+        valid_types = {"warmup", "technical", "behavioral", "resume_probe", "situational", "closing"}
         q_type = q.get("type", "technical")
+        if q_type not in valid_types:
+            q_type = "technical"
         difficulty = q.get("difficulty", "medium")
 
         await db.execute(
