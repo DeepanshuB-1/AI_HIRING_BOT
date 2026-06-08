@@ -3,8 +3,16 @@
 
 def consent_sms(name: str, consent_url: str) -> str:
     return (
-        f"Hi {name}! You've applied for a role with us. "
-        f"Please give your consent for a 15-min AI screening call: {consent_url} "
+        f"Hi {name}! Great news — you've been shortlisted for an AI screening interview. "
+        f"Click the link to pick your 30-min interview slot: {consent_url} "
+        f"Reply STOP to opt out."
+    )
+
+
+def reschedule_sms(name: str, consent_url: str) -> str:
+    return (
+        f"Hi {name}, we couldn't reach you at your scheduled time. "
+        f"Please click the link to choose a new interview slot: {consent_url} "
         f"Reply STOP to opt out."
     )
 

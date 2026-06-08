@@ -329,6 +329,52 @@ async def cluster_candidates(
     return {"job_id": str(job_id), "n_clusters": k, "clusters": clusters}
 
 
+# ── Schedule view ────────────────────────────────────────────────────────────
+
+@router.get("/schedule")
+async def get_schedule(
+    date_str: str | None = Query(None, description="Date in YYYY-MM-DD (defaults to today IST)"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return all scheduled calls for a given day, sorted by time."""
+    from datetime import date, datetime
+    from zoneinfo import ZoneInfo
+    from sqlalchemy import and_
+
+    IST = ZoneInfo("Asia/Kolkata")
+    if date_str:
+        try:
+            target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+    else:
+        target_date = datetime.now(IST).date()
+
+    result = await db.execute(
+        select(ScreeningCall).where(
+            and_(
+                ScreeningCall.scheduled_date == target_date,
+                ScreeningCall.scheduled_time.isnot(None),
+            )
+        ).order_by(ScreeningCall.scheduled_time)
+    )
+    calls = result.scalars().all()
+
+    rows = []
+    for c in calls:
+        candidate = await db.get(Candidate, c.candidate_id)
+        rows.append({
+            "call_id": str(c.id),
+            "scheduled_time": c.scheduled_time.strftime("%H:%M") if c.scheduled_time else None,
+            "status": c.status,
+            "candidate_id": str(c.candidate_id),
+            "candidate_name": candidate.name if candidate else "unknown",
+            "candidate_phone": candidate.phone if candidate else None,
+        })
+
+    return {"date": target_date.isoformat(), "total": len(rows), "calls": rows}
+
+
 # ── Per-candidate endpoints (parameterised — must come AFTER specific paths) ──
 
 @router.get("/candidates/{candidate_id}", response_model=CandidateDetail)
