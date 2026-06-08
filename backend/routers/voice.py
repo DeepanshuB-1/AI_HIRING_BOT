@@ -372,12 +372,13 @@ async def voice_start(
         "candidate_id": candidate_id,
         "candidate_name": candidate.name,
         "role": role,
+        "company": settings.company_name,
         "questions": questions,
         "question_index": 0,
         "transcript": [],
     })
 
-    opening_text = generate_opening(candidate.name, role)
+    opening_text = generate_opening(candidate.name, role, settings.company_name)
     append_transcript(CallSid, "ai", opening_text)
     return _twiml(_play_or_say(opening_text))
 

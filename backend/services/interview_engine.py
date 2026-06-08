@@ -1,20 +1,25 @@
 from .ollama_client import ollama_chat, INTERVIEW_MODEL
 
 
-def generate_opening(candidate_name: str, role: str) -> str:
+def generate_opening(candidate_name: str, role: str, company: str = "our company") -> str:
     """Layer 5 — generate the first thing the AI says when the candidate picks up."""
-    prompt = f"""Generate a warm, professional opening for a phone screening interview.
+    prompt = f"""Generate a warm, natural, professional phone screening introduction. It should sound like a real interviewer — friendly and human, but honest about being AI.
 
 Candidate name: {candidate_name}
-Role applying for: {role}
+Role they applied for: {role}
+Company: {company}
 
 Rules:
-- Introduce yourself as "Alex, an AI interviewer" — do NOT pretend to be human
-- Explicitly state: "This interview is conducted by an AI system" (legal requirement)
-- Welcome them and ask if they can hear clearly and are ready to begin
-- Be concise — maximum 4 sentences
-- Return ONLY the spoken text, no labels, no quotes"""
-    return ollama_chat(prompt, model=INTERVIEW_MODEL, expect_json=False, temperature=0.4)
+- Start with a warm greeting using the candidate's first name only (not full name)
+- Say you are calling from {company} regarding their application for {role}
+- Introduce yourself as "Alex" — an AI interviewer working on behalf of {company}
+- Clearly but naturally disclose this is an AI-conducted screening (legal requirement — do not skip)
+- Mention the interview will take about 20 to 25 minutes
+- Ask if they are in a good place to talk and ready to begin
+- Tone: warm, encouraging, not robotic — like a friendly HR person
+- Maximum 5 sentences
+- Return ONLY the spoken text, no labels, no quotes, no stage directions"""
+    return ollama_chat(prompt, model=INTERVIEW_MODEL, expect_json=False, temperature=0.5)
 
 
 def generate_next_response(call_state: dict) -> tuple[str, bool]:
@@ -63,17 +68,22 @@ Instructions:
 def generate_closing(call_state: dict) -> str:
     """Generate the final thank-you statement when all questions are done."""
     candidate_name = call_state.get("candidate_name", "candidate")
+    first_name = candidate_name.split()[0]
     role = call_state.get("role", "this role")
+    company = call_state.get("company", "the company")
 
-    prompt = f"""Generate a warm closing statement to end a phone screening interview.
+    prompt = f"""Generate a warm, genuine closing statement to end a phone screening interview.
 
-Candidate: {candidate_name}
+Candidate first name: {first_name}
 Role: {role}
+Company: {company}
 
 Rules:
-- Thank them sincerely for their time
-- Let them know the HR team will review and be in touch within 3 to 5 business days
-- Wish them well
+- Use first name only, not full name
+- Sincerely thank them for their time and answers
+- Tell them the {company} HR team will review their screening and reach out within 3 to 5 business days
+- Wish them the very best
+- Tone: warm, human, encouraging — leave a good impression
 - Maximum 3 sentences
 - Return ONLY the spoken text"""
-    return ollama_chat(prompt, model=INTERVIEW_MODEL, expect_json=False, temperature=0.4)
+    return ollama_chat(prompt, model=INTERVIEW_MODEL, expect_json=False, temperature=0.5)
