@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, date, time
-from sqlalchemy import String, Integer, Text, Date, Time, DateTime, Enum as SAEnum
+from sqlalchemy import String, Integer, Text, Date, Time, DateTime, Enum as SAEnum, func
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from backend.database import Base
@@ -32,4 +32,4 @@ class ScreeningCall(Base):
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     interview_model: Mapped[str] = mapped_column(String(50), default="mistral:7b")
     status: Mapped[CallStatus] = mapped_column(SAEnum(CallStatus), default=CallStatus.pending)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, server_default=func.now())

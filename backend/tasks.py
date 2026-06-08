@@ -70,7 +70,6 @@ def run_profile_extraction(self, candidate_id: str, resume_path: str):
                     candidate.resume_text = text
                     candidate.profile_json = profile
                     candidate.profile_embedding = profile_embedding
-                    candidate.status = "analyzed"
                     await db.commit()
 
         _run(_save())
@@ -237,6 +236,8 @@ def run_report_gen(self, call_sid: str):
         return {"status": "ok", "call_sid": call_sid}
     except Exception as exc:
         logger.error(f"Report generation failed: {exc}")
+        if self.request.retries >= self.max_retries:
+            return {"status": "failed", "call_sid": call_sid}
         raise self.retry(exc=exc, countdown=15)
 
 

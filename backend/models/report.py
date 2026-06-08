@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Integer, Text, DateTime, Enum as SAEnum, Index
+from sqlalchemy import String, Integer, Text, DateTime, Enum as SAEnum, Index, func
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from pgvector.sqlalchemy import Vector
@@ -45,7 +45,7 @@ class ScoreReport(Base):
     report_model: Mapped[str] = mapped_column(String(50), default="llama3.1:8b")
     hr_override: Mapped[AIRecommendation | None] = mapped_column(SAEnum(AIRecommendation))
     hr_notes: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, server_default=func.now())
 
     # pgvector column (Layer 6)
     report_embedding: Mapped[list | None] = mapped_column(Vector(768))

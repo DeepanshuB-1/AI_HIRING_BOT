@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Integer, Text, DateTime, Index
+from sqlalchemy import String, Integer, Text, DateTime, Index, func
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from pgvector.sqlalchemy import Vector
@@ -29,7 +29,7 @@ class Job(Base):
     question_count: Mapped[int] = mapped_column(Integer, default=10)
     pinned_questions: Mapped[list | None] = mapped_column(JSONB)
     ollama_model_override: Mapped[str | None] = mapped_column(String(50))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, server_default=func.now())
 
     # pgvector column (Layer 1.5)
     jd_embedding: Mapped[list | None] = mapped_column(Vector(768))

@@ -1,5 +1,6 @@
 import uuid
 import logging
+import html
 from datetime import datetime
 from fastapi import APIRouter, Depends, Form, HTTPException, Query
 from fastapi.responses import Response
@@ -29,18 +30,20 @@ def _twiml(content: str) -> Response:
     )
 
 
-def _play_or_say(text: str, action_url: str) -> str:
-    """Return TwiML that plays ElevenLabs audio or falls back to <Say> if TTS fails."""
+def _play_or_say(text: str) -> str:
+    """Return TwiML play+gather block. Falls back to <Say> if ElevenLabs TTS fails."""
     audio_path = synthesize(text)
     if audio_path:
         play_block = f'<Play>{settings.webhook_base_url}{audio_path}</Play>'
     else:
-        play_block = f'<Say voice="alice" language="en-IN">{text}</Say>'
+        safe = html.escape(text)
+        play_block = f'<Say voice="alice" language="en-IN">{safe}</Say>'
+    respond_url = f"{settings.webhook_base_url}/voice/respond"
     gather = (
-        f'<Gather input="speech" action="{settings.webhook_base_url}/voice/respond" '
+        f'<Gather input="speech" action="{respond_url}" '
         f'method="POST" speechTimeout="auto" language="en-IN" timeout="10">'
         f'</Gather>'
-        f'<Redirect method="POST">{settings.webhook_base_url}/voice/respond</Redirect>'
+        f'<Redirect method="POST">{respond_url}</Redirect>'
     )
     return play_block + gather
 
@@ -154,20 +157,7 @@ async def voice_start(
 
     opening_text = generate_opening(candidate.name, role)
     append_transcript(CallSid, "ai", opening_text)
-
-    audio_path = synthesize(opening_text)
-    if audio_path:
-        play_block = f'<Play>{settings.webhook_base_url}{audio_path}</Play>'
-    else:
-        play_block = f'<Say voice="alice" language="en-IN">{opening_text}</Say>'
-
-    gather = (
-        f'<Gather input="speech" action="{settings.webhook_base_url}/voice/respond" '
-        f'method="POST" speechTimeout="auto" language="en-IN" timeout="10">'
-        f'</Gather>'
-        f'<Redirect method="POST">{settings.webhook_base_url}/voice/respond</Redirect>'
-    )
-    return _twiml(play_block + gather)
+    return _twiml(_play_or_say(opening_text))
 
 
 @router.post("/respond")
@@ -193,23 +183,17 @@ async def voice_respond(
     response_text, is_closing = generate_next_response(state)
     append_transcript(CallSid, "ai", response_text)
 
-    audio_path = synthesize(response_text)
-    if audio_path:
-        play_block = f'<Play>{settings.webhook_base_url}{audio_path}</Play>'
-    else:
-        play_block = f'<Say voice="alice" language="en-IN">{response_text}</Say>'
-
     if is_closing:
+        audio_path = synthesize(response_text)
+        play_block = (
+            f'<Play>{settings.webhook_base_url}{audio_path}</Play>'
+            if audio_path
+            else f'<Say voice="alice" language="en-IN">{html.escape(response_text)}</Say>'
+        )
         run_report_gen.delay(CallSid)
         return _twiml(play_block + "<Hangup/>")
 
-    gather = (
-        f'<Gather input="speech" action="{settings.webhook_base_url}/voice/respond" '
-        f'method="POST" speechTimeout="auto" language="en-IN" timeout="10">'
-        f'</Gather>'
-        f'<Redirect method="POST">{settings.webhook_base_url}/voice/respond</Redirect>'
-    )
-    return _twiml(play_block + gather)
+    return _twiml(_play_or_say(response_text))
 
 
 @router.post("/status")

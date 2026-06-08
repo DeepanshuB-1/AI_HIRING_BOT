@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Integer, Float, Text, Boolean, DateTime, Enum as SAEnum, Index
+from sqlalchemy import String, Integer, Float, Text, Boolean, DateTime, Enum as SAEnum, Index, func
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from pgvector.sqlalchemy import Vector
@@ -55,7 +55,7 @@ class Candidate(Base):
     source: Mapped[str | None] = mapped_column(String(50))
     consent_given: Mapped[bool] = mapped_column(Boolean, default=False)
     consent_at: Mapped[datetime | None] = mapped_column(DateTime)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, server_default=func.now())
 
     # pgvector columns (Layer 1.5 / Layer 2 / Layer 3)
     resume_embedding: Mapped[list | None] = mapped_column(Vector(768))

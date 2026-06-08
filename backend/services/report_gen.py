@@ -6,7 +6,7 @@ def generate_report(call_state: dict, profile: dict) -> dict:
     """Layer 6 — generate post-call score report via llama3.1:8b."""
     transcript = call_state.get("transcript", [])
     transcript_text = "\n".join(
-        f"Q: {t.get('question', '')}\nA: {t.get('answer', '')}"
+        f"{'Interviewer' if t.get('role') == 'ai' else 'Candidate'}: {t.get('text', '')}"
         for t in transcript
     )
 
