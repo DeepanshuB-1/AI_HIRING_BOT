@@ -149,18 +149,34 @@ def run_jd_scoring(self, candidate_id: str, jd_text: str):
 
                 candidate_name = candidate.name
                 candidate_email = candidate.email
+                candidate_phone = candidate.phone
                 await db.commit()
-                return {**scores, "_decision": decision, "_name": candidate_name, "_email": candidate_email}
+                return {
+                    **scores,
+                    "_decision": decision,
+                    "_name": candidate_name,
+                    "_email": candidate_email,
+                    "_phone": candidate_phone,
+                    "_cid": candidate_id,
+                }
 
         result = _run(_score())
+        decision = result.get("_decision")
 
-        # Send rejection email if auto-rejected
-        if result.get("_decision") == "reject":
+        if decision == "reject":
+            # Rejected — send rejection email, no SMS
             from .config import settings as _s
             from .notifications.templates import rejection_email_html
             from .notifications.email import send_email
             subject, html = rejection_email_html(result["_name"], "the applied role", _s.company_name)
             send_email_task.delay(result["_email"], subject, html)
+
+        else:
+            # Passed threshold — send SMS consent link so candidate can approve the call
+            from .config import settings as _s
+            from .notifications.templates import consent_sms
+            consent_url = f"{_s.webhook_base_url}/voice/consent/{result['_cid']}"
+            send_sms_task.delay(result["_phone"], consent_sms(result["_name"], consent_url))
 
         return result
     except Exception as exc:

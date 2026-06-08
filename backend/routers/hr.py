@@ -146,12 +146,6 @@ async def upload_candidate(
     )
     chain.delay()
 
-    # Send SMS consent link to candidate
-    from backend.tasks import send_sms_task
-    from backend.notifications.templates import consent_sms
-    consent_url = f"{settings.webhook_base_url}/voice/consent/{cid}"
-    send_sms_task.delay(phone, consent_sms(name, consent_url))
-
     return candidate
 
 
