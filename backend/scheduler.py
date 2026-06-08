@@ -28,6 +28,19 @@ async def auto_schedule_calls():
     from backend.voice.twilio_client import initiate_call
 
     async with AsyncSessionLocal() as db:
+        # Check how many calls are currently active — respect GPU concurrency limit
+        active_count_result = await db.execute(
+            select(ScreeningCall).where(
+                ScreeningCall.status.in_([CallStatus.dialing, CallStatus.in_progress])
+            )
+        )
+        active_count = len(active_count_result.scalars().all())
+        slots_available = settings.max_concurrent_calls - active_count
+
+        if slots_available <= 0:
+            logger.debug(f"[scheduler] {active_count} call(s) already active — skipping (max={settings.max_concurrent_calls})")
+            return
+
         result = await db.execute(
             select(Candidate).where(
                 and_(
@@ -36,13 +49,17 @@ async def auto_schedule_calls():
                     Candidate.jd_id.isnot(None),
                     Candidate.questions_json.isnot(None),
                 )
-            )
+            ).order_by(Candidate.created_at.asc())  # FIFO — oldest applicant first
         )
         candidates = result.scalars().all()
 
+        initiated = 0
         for candidate in candidates:
-            # Skip if already has an active/dialing call
-            active = await db.execute(
+            if initiated >= slots_available:
+                break  # Don't exceed GPU concurrency limit
+
+            # Skip if this candidate already has an active/dialing call
+            existing = await db.execute(
                 select(ScreeningCall).where(
                     and_(
                         ScreeningCall.candidate_id == candidate.id,
@@ -50,7 +67,7 @@ async def auto_schedule_calls():
                     )
                 )
             )
-            if active.scalars().first():
+            if existing.scalars().first():
                 continue
 
             try:
@@ -66,6 +83,7 @@ async def auto_schedule_calls():
                 call_record.twilio_call_sid = call_sid
                 candidate.status = CandidateStatus.scheduled
                 await db.commit()
+                initiated += 1
                 logger.info(f"[scheduler] Auto-initiated call for {candidate.name} → {call_sid}")
 
             except Exception as exc:

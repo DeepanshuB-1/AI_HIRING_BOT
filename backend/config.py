@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     call_window_start: int = 9   # earliest hour to place calls (24h, IST)
     call_window_end: int = 18    # latest hour to place calls (24h, IST)
     auto_schedule_interval_minutes: int = 5
+    max_concurrent_calls: int = 1  # local Ollama GPU can only handle 1 at a time
 
     # Company / notifications
     company_name: str = "Our Company"
