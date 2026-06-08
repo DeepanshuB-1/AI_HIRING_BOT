@@ -8,7 +8,15 @@ from backend.config import settings
 
 def _generate_raw_questions(profile: dict, jd_text: str, count: int) -> list[dict]:
     """LLM-only question generation (no DB, sync)."""
-    prompt = f"""You are an expert technical interviewer. Generate {count} interview questions for this candidate.
+    prompt = f"""You are an expert technical interviewer. Generate {count} interview questions for this candidate applying for the role described below.
+
+RULES (follow strictly):
+1. Technical questions MUST focus on skills explicitly required by the Job Description — not every skill on the resume.
+2. resume_probe questions must only ask about skills from the candidate's profile that are DIRECTLY relevant to the Job Description. Do NOT probe irrelevant technologies (e.g. do not ask a Backend Python Developer about React or frontend frameworks unless the JD requires it).
+3. Include exactly 1 warmup question (easy, open-ended) and 1 closing question.
+4. Remaining questions: mix of technical, behavioral, situational, and resume_probe.
+5. Match difficulty to seniority implied by the JD.
+
 Return ONLY a valid JSON array. Each item must have exactly these fields:
 {{
   "id": <integer starting at 1>,
@@ -19,8 +27,11 @@ Return ONLY a valid JSON array. Each item must have exactly these fields:
   "follow_up": "Follow-up question if the answer is vague"
 }}
 
-Candidate Profile: {profile}
-Job Description: {jd_text}
+Job Description (source of truth for what skills matter):
+{jd_text}
+
+Candidate Profile (use only to personalise questions, not to determine topic):
+{profile}
 """
     result = ollama_chat(prompt, model=ANALYSIS_MODEL, expect_json=True)
     if isinstance(result, list):
