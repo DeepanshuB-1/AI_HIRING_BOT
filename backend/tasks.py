@@ -1,4 +1,6 @@
 from .celery_app import celery
+from .models.candidate import CandidateStatus
+from .models.call import CallStatus
 import logging
 import asyncio
 
@@ -43,7 +45,7 @@ def _mark_failed(candidate_id: str):
         from .models.candidate import Candidate, CandidateStatus
         async with AsyncSessionLocal() as db:
             candidate = await db.get(Candidate, uuid.UUID(candidate_id))
-            if candidate and candidate.status not in ("rejected", "completed", "failed"):
+            if candidate and candidate.status not in (CandidateStatus.rejected, CandidateStatus.completed, CandidateStatus.failed):
                 candidate.status = CandidateStatus.failed
                 await db.commit()
 
@@ -141,11 +143,11 @@ def run_jd_scoring(self, candidate_id: str, jd_text: str):
 
                 decision = should_proceed(scores)
                 if decision == "reject":
-                    candidate.status = "rejected"
+                    candidate.status = CandidateStatus.rejected
                 elif decision == "review":
-                    candidate.status = "pending_review"
+                    candidate.status = CandidateStatus.pending_review
                 else:
-                    candidate.status = "analyzed"
+                    candidate.status = CandidateStatus.analyzed
 
                 candidate_name = candidate.name
                 candidate_email = candidate.email
@@ -256,8 +258,8 @@ def run_report_gen(self, call_sid: str):
                     report_embedding=report_embedding,
                 )
                 db.add(report)
-                call.status = "completed"
-                candidate.status = "completed"
+                call.status = CallStatus.completed
+                candidate.status = CandidateStatus.completed
                 await db.commit()
                 return {
                     "candidate_name": candidate.name,

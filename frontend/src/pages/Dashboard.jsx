@@ -34,9 +34,8 @@ export default function Dashboard() {
   const byStatus = (s) => candidates.filter(c => c.status === s).length
   const completed = byStatus('completed')
   const total = candidates.length
-  const passRate = total > 0
-    ? Math.round((candidates.filter(c => ['scheduled','in_call','completed'].includes(c.status)).length / total) * 100)
-    : 0
+  const screened = candidates.filter(c => ['completed', 'rejected'].includes(c.status)).length
+  const passRate = screened > 0 ? Math.round((completed / screened) * 100) : 0
 
   const recent = [...candidates].slice(0, 6)
 

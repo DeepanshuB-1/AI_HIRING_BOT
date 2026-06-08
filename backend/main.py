@@ -7,7 +7,7 @@ from pathlib import Path
 from backend.config import settings
 from backend.database import create_tables
 from backend.redis_client import ping_redis
-from backend.routers import hr, voice, auth
+from backend.routers import hr, voice, auth, portal
 from backend.scheduler import start_scheduler, stop_scheduler
 import backend.models  # noqa: F401 — ensures all tables are registered before create_all()
 
@@ -42,12 +42,11 @@ app.add_middleware(
 )
 
 # serve cached TTS audio files
-audio_path = Path(settings.audio_cache_dir)
-audio_path.mkdir(parents=True, exist_ok=True)
-app.mount("/audio", StaticFiles(directory=str(audio_path)), name="audio")
+app.mount("/audio", StaticFiles(directory=str(Path(settings.audio_cache_dir))), name="audio")
 
 # routers
 app.include_router(auth.router)
+app.include_router(portal.router)
 app.include_router(hr.router)
 app.include_router(voice.router)
 
@@ -56,7 +55,13 @@ app.include_router(voice.router)
 async def health():
     import ollama as _ollama
     try:
-        pulled = [m.model for m in _ollama.list().models]
+        raw = _ollama.list()
+        # ollama 0.2.x returns a dict; newer versions return an object with .models
+        model_list = raw.get('models', []) if isinstance(raw, dict) else raw.models
+        pulled = [
+            (m.get('name') or m.get('model', '')) if isinstance(m, dict) else (m.model or m.name)
+            for m in model_list
+        ]
         def _pulled(name: str) -> bool:
             return any(p == name or p.startswith(name + ":") for p in pulled)
         ollama_ok = _pulled(settings.ollama_analysis_model)

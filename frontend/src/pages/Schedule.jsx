@@ -68,7 +68,8 @@ export default function Schedule() {
           {/* Timeline */}
           <div className="divide-y divide-gray-50">
             {data.calls.map((c, i) => {
-              const isPast = isToday && c.scheduled_time < new Date().toTimeString().slice(0, 5)
+              const nowHHMM = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false })
+              const isPast = isToday && c.scheduled_time < nowHHMM
               return (
                 <div key={c.call_id} className={`flex items-center gap-5 px-6 py-4 ${isPast ? 'opacity-60' : ''}`}>
                   {/* Time */}

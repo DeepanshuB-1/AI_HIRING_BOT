@@ -12,10 +12,10 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     if (token) {
       axios.defaults.headers.common['Authorization'] = `Bearer ${token}`
-      // Verify token is still valid
+      // Verify token is still valid (only logout on explicit 401, not network errors)
       axios.get('/auth/me')
         .then(r => setUser(r.data))
-        .catch(() => logout())
+        .catch(err => { if (err.response?.status === 401) logout() })
         .finally(() => setReady(true))
     } else {
       delete axios.defaults.headers.common['Authorization']

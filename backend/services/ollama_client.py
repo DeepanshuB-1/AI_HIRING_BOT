@@ -4,7 +4,10 @@ import re
 from backend.config import settings
 
 ANALYSIS_MODEL = settings.ollama_analysis_model   # llama3.1:8b — Layers 2,3,4,6
-INTERVIEW_MODEL = settings.ollama_interview_model  # mistral:7b  — Layer 5
+INTERVIEW_MODEL = settings.ollama_interview_model  # llama3.1:8b — Layer 5
+
+# Single client with a 3-minute timeout so a slow model never hangs the process
+_client = ollama.Client(host=settings.ollama_base_url, timeout=180)
 
 
 def ollama_chat(
@@ -15,7 +18,7 @@ def ollama_chat(
     max_tokens: int = 2048,
 ) -> str | dict:
     """Send a prompt to Ollama and return the response text or parsed JSON."""
-    response = ollama.chat(
+    response = _client.chat(
         model=model,
         messages=[{"role": "user", "content": prompt}],
         options={
