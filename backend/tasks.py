@@ -289,7 +289,6 @@ def run_report_gen(self, call_sid: str):
             next_round_questions=result["next_round_questions"],
             company=_s.company_name,
         )
-        send_email(result["candidate_email"], subject, html)  # send to HR
         send_email_task.delay(_s.hr_email, subject, html)
 
         return {"status": "ok", "call_sid": call_sid}
