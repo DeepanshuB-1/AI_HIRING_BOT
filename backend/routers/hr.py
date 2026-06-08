@@ -10,6 +10,8 @@ from backend.database import get_db
 from backend.config import settings
 from backend.models.candidate import Candidate, CandidateStatus
 from backend.models.job import Job
+from backend.models.call import ScreeningCall
+from backend.models.report import ScoreReport
 from backend.schemas.candidate import CandidateCreate, CandidateOut, CandidateDetail
 from backend.schemas.job import JobCreate, JobOut, JobDetail
 from backend.schemas.search import CandidateSearchResult
@@ -143,6 +145,12 @@ async def upload_candidate(
         | run_question_gen.si(cid, jid, job.jd_text)
     )
     chain.delay()
+
+    # Send SMS consent link to candidate
+    from backend.tasks import send_sms_task
+    from backend.notifications.templates import consent_sms
+    consent_url = f"{settings.webhook_base_url}/voice/consent/{cid}"
+    send_sms_task.delay(phone, consent_sms(name, consent_url))
 
     return candidate
 
@@ -337,6 +345,20 @@ async def get_candidate(candidate_id: uuid.UUID, db: AsyncSession = Depends(get_
     return candidate
 
 
+@router.patch("/candidates/{candidate_id}/phone", response_model=CandidateOut)
+async def update_candidate_phone(
+    candidate_id: uuid.UUID,
+    phone: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+):
+    candidate = await db.get(Candidate, candidate_id)
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    candidate.phone = phone
+    await db.commit()
+    return candidate
+
+
 @router.delete("/candidates/{candidate_id}", status_code=204)
 async def delete_candidate(candidate_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     candidate = await db.get(Candidate, candidate_id)
@@ -345,6 +367,47 @@ async def delete_candidate(candidate_id: uuid.UUID, db: AsyncSession = Depends(g
     if candidate.resume_url:
         Path(candidate.resume_url).unlink(missing_ok=True)
     await db.delete(candidate)
+
+
+@router.get("/candidates/{candidate_id}/report")
+async def get_candidate_report(candidate_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """Get the post-call score report for a candidate."""
+    result = await db.execute(
+        select(ScreeningCall).where(ScreeningCall.candidate_id == candidate_id)
+        .order_by(ScreeningCall.created_at.desc())
+    )
+    call = result.scalars().first()
+    if not call:
+        raise HTTPException(status_code=404, detail="No screening call found for this candidate")
+
+    report_result = await db.execute(
+        select(ScoreReport).where(ScoreReport.call_id == call.id)
+    )
+    report = report_result.scalars().first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not generated yet — call may still be processing")
+
+    return {
+        "candidate_id": str(candidate_id),
+        "call_id": str(call.id),
+        "call_status": call.status,
+        "call_duration_seconds": call.duration_seconds,
+        "transcript": call.transcript,
+        "overall_score": report.overall_score,
+        "skills_score": report.skills_score,
+        "experience_score": report.experience_score,
+        "communication_score": report.communication_score,
+        "culture_fit_score": report.culture_fit_score,
+        "confidence_score": report.confidence_score,
+        "ai_recommendation": report.ai_recommendation,
+        "ai_reasoning": report.ai_reasoning,
+        "red_flags": report.red_flags,
+        "strengths": report.strengths,
+        "next_round_questions": report.next_round_questions,
+        "hr_override": report.hr_override,
+        "hr_notes": report.hr_notes,
+        "created_at": report.created_at,
+    }
 
 
 @router.get("/candidates/{candidate_id}/similar", response_model=list[CandidateSearchResult])

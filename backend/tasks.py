@@ -147,10 +147,22 @@ def run_jd_scoring(self, candidate_id: str, jd_text: str):
                 else:
                     candidate.status = "analyzed"
 
+                candidate_name = candidate.name
+                candidate_email = candidate.email
                 await db.commit()
-                return scores
+                return {**scores, "_decision": decision, "_name": candidate_name, "_email": candidate_email}
 
-        return _run(_score())
+        result = _run(_score())
+
+        # Send rejection email if auto-rejected
+        if result.get("_decision") == "reject":
+            from .config import settings as _s
+            from .notifications.templates import rejection_email_html
+            from .notifications.email import send_email
+            subject, html = rejection_email_html(result["_name"], "the applied role", _s.company_name)
+            send_email_task.delay(result["_email"], subject, html)
+
+        return result
     except Exception as exc:
         logger.error(f"JD scoring failed: {exc}")
         if self.request.retries >= self.max_retries:
@@ -229,10 +241,41 @@ def run_report_gen(self, call_sid: str):
                 )
                 db.add(report)
                 call.status = "completed"
+                candidate.status = "completed"
                 await db.commit()
+                return {
+                    "candidate_name": candidate.name,
+                    "candidate_email": candidate.email,
+                    "role": state.get("role", "the applied role"),
+                    "overall_score": report.overall_score,
+                    "recommendation": report_data.get("recommendation", "HOLD"),
+                    "reasoning": report_data.get("reasoning", ""),
+                    "strengths": report_data.get("strengths", []),
+                    "red_flags": report_data.get("red_flags", []),
+                    "next_round_questions": report_data.get("next_round_questions", []),
+                }
 
-        _run(_save())
+        result = _run(_save())
         logger.info(f"Report generated for call {call_sid}")
+
+        # Email HR the report
+        from .config import settings as _s
+        from .notifications.templates import hr_report_email_html
+        from .notifications.email import send_email
+        subject, html = hr_report_email_html(
+            candidate_name=result["candidate_name"],
+            role=result["role"],
+            overall_score=result["overall_score"],
+            recommendation=result["recommendation"],
+            reasoning=result["reasoning"],
+            strengths=result["strengths"],
+            red_flags=result["red_flags"],
+            next_round_questions=result["next_round_questions"],
+            company=_s.company_name,
+        )
+        send_email(result["candidate_email"], subject, html)  # send to HR
+        send_email_task.delay(_s.hr_email, subject, html)
+
         return {"status": "ok", "call_sid": call_sid}
     except Exception as exc:
         logger.error(f"Report generation failed: {exc}")

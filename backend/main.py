@@ -8,6 +8,7 @@ from backend.config import settings
 from backend.database import create_tables
 from backend.redis_client import ping_redis
 from backend.routers import hr, voice
+from backend.scheduler import start_scheduler, stop_scheduler
 import backend.models  # noqa: F401 — ensures all tables are registered before create_all()
 
 
@@ -18,9 +19,11 @@ async def lifespan(app: FastAPI):
     Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
     Path(settings.audio_cache_dir).mkdir(parents=True, exist_ok=True)
     redis_ok = ping_redis()
-    print(f"[startup] DB tables ready | Redis: {'OK' if redis_ok else 'UNREACHABLE'}")
+    start_scheduler()
+    print(f"[startup] DB tables ready | Redis: {'OK' if redis_ok else 'UNREACHABLE'} | Scheduler: {'ON' if settings.scheduler_enabled else 'OFF'}")
     yield
-    # shutdown (nothing to teardown yet)
+    # shutdown
+    stop_scheduler()
 
 
 app = FastAPI(
@@ -53,8 +56,10 @@ async def health():
     import ollama as _ollama
     try:
         pulled = [m.model for m in _ollama.list().models]
-        ollama_ok = settings.ollama_analysis_model in pulled
-        ollama_embed_ok = settings.ollama_embed_model in pulled
+        def _pulled(name: str) -> bool:
+            return any(p == name or p.startswith(name + ":") for p in pulled)
+        ollama_ok = _pulled(settings.ollama_analysis_model)
+        ollama_embed_ok = _pulled(settings.ollama_embed_model)
     except Exception:
         ollama_ok = False
         ollama_embed_ok = False

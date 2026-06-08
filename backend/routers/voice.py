@@ -108,6 +108,14 @@ async def initiate_screening(candidate_id: uuid.UUID, db: AsyncSession = Depends
     candidate.status = CandidateStatus.scheduled
     await db.commit()
 
+    # Notify candidate via email that call is coming
+    from backend.tasks import send_email_task
+    from backend.notifications.templates import interview_invite_email_html
+    job = await db.get(Job, candidate.jd_id)
+    role = job.title if job else "the applied role"
+    subject, html_body = interview_invite_email_html(candidate.name, role, settings.company_name)
+    send_email_task.delay(candidate.email, subject, html_body)
+
     return {"call_sid": call_sid, "call_id": str(call_record.id), "status": "initiated"}
 
 

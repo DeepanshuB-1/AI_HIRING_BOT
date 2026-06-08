@@ -45,6 +45,16 @@ class Settings(BaseSettings):
     call_retry_count: int = 3
     call_retry_interval_minutes: int = 30
 
+    # Scheduling
+    scheduler_enabled: bool = True
+    call_window_start: int = 9   # earliest hour to place calls (24h, IST)
+    call_window_end: int = 18    # latest hour to place calls (24h, IST)
+    auto_schedule_interval_minutes: int = 5
+
+    # Company / notifications
+    company_name: str = "Our Company"
+    hr_email: str = "hr@yourcompany.com"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 
