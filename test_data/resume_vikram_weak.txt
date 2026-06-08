@@ -1,0 +1,37 @@
+Vikram Nair
+Email: riderrides01@gmail.com
+Phone: +917877477347
+Location: Chennai, India
+
+SUMMARY
+Frontend developer with 1.5 years of experience. Primarily React and JavaScript. Limited backend exposure. Looking to transition into full-stack development.
+
+SKILLS
+- Languages: JavaScript, TypeScript, HTML, CSS, Python (beginner)
+- Frontend: React, Next.js, Tailwind CSS, Redux
+- Tools: Git, Figma, VS Code, npm
+- Databases: Firebase Firestore (basic)
+- No experience with: PostgreSQL, Docker, Celery, Redis, FastAPI
+
+EXPERIENCE
+
+Frontend Developer — Freshworks, Chennai (Mar 2023 – Present)
+- Built React dashboards for customer support tools
+- Integrated REST APIs from backend team
+- Wrote basic Python scripts for data export (50 lines)
+
+Intern — Local Startup (Jan 2023 – Feb 2023)
+- HTML/CSS landing pages
+- Basic JavaScript form validation
+
+EDUCATION
+B.E. in Electronics — Anna University (2019–2023)
+CGPA: 6.9 / 10
+
+PROJECTS
+
+Portfolio Website
+- Static Next.js site on Vercel
+
+To-Do App
+- React + Firebase CRUD application

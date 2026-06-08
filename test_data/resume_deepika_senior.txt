@@ -1,0 +1,50 @@
+Deepika Sharma
+Email: deepika.sharma.engineer@gmail.com
+Phone: +917811000004
+Location: Hyderabad, India
+
+SUMMARY
+Senior Backend Engineer with 5 years of experience designing and scaling Python microservices. Deep expertise in FastAPI, PostgreSQL, Docker, Kubernetes, and distributed systems. Led backend architecture for 2 products serving 1M+ users.
+
+SKILLS
+- Languages: Python, Go (intermediate), SQL
+- Frameworks: FastAPI, Django, gRPC
+- Databases: PostgreSQL, Redis, Elasticsearch, ClickHouse
+- Async: asyncio, asyncpg, aiohttp
+- DevOps: Docker, Kubernetes, Helm, Terraform, AWS (EC2, RDS, S3, Lambda, SQS)
+- Tools: Celery, SQLAlchemy, Alembic, pgvector, Git, Pytest, Locust
+- Architecture: Microservices, Event-driven, CQRS, Domain-Driven Design
+
+EXPERIENCE
+
+Senior Backend Engineer — Swiggy, Hyderabad (Mar 2021 – Present)
+- Architected FastAPI microservices processing 2M+ orders/day
+- Designed multi-tenant PostgreSQL schema with row-level security
+- Built async Celery pipelines with Redis for real-time notifications
+- Reduced API latency by 60% via asyncpg connection pooling + query optimisation
+- Set up Kubernetes deployments with HPA and rolling updates
+- Mentored 3 junior engineers; led weekly design reviews
+
+Backend Engineer — CRED, Bangalore (Jul 2019 – Feb 2021)
+- Developed payment processing APIs in Python/FastAPI
+- Implemented idempotency keys and distributed locking via Redis
+- Built CDC pipelines using Debezium + Kafka for audit logging
+- Wrote load tests with Locust simulating 10k concurrent users
+
+EDUCATION
+B.Tech in Computer Science — IIT Hyderabad (2015–2019)
+CGPA: 9.1 / 10
+
+PROJECTS
+
+Vector Search Engine
+- pgvector + FastAPI semantic search over 10M documents
+- HNSW indexing, sub-10ms query latency
+
+Distributed Rate Limiter
+- Redis + Lua scripts + Python library
+- Open sourced, 300+ GitHub stars
+
+CERTIFICATIONS
+- AWS Solutions Architect – Professional (2022)
+- CKA – Certified Kubernetes Administrator (2023)

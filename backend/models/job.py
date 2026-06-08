@@ -20,7 +20,11 @@ class Job(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    hr_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
+    company: Mapped[str | None] = mapped_column(String(200))
+    location: Mapped[str | None] = mapped_column(String(200))
+    employment_type: Mapped[str | None] = mapped_column(String(50), default="full_time")
     department: Mapped[str | None] = mapped_column(String(100))
     jd_text: Mapped[str] = mapped_column(Text, nullable=False)
     required_skills: Mapped[list | None] = mapped_column(JSONB)
@@ -29,6 +33,7 @@ class Job(Base):
     question_count: Mapped[int] = mapped_column(Integer, default=10)
     pinned_questions: Mapped[list | None] = mapped_column(JSONB)
     ollama_model_override: Mapped[str | None] = mapped_column(String(50))
+    is_active: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, server_default=func.now())
 
     # pgvector column (Layer 1.5)

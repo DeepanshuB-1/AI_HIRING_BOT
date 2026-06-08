@@ -1,0 +1,38 @@
+Priya Nair
+Email: priya.nair.engineer@gmail.com
+Phone: +917900000001
+Location: Hyderabad, India
+
+SUMMARY
+Full-stack developer with 2 years of experience. Comfortable with React on the frontend and Node.js/Express on the backend. Some exposure to Python scripting and basic SQL queries.
+
+SKILLS
+- Languages: JavaScript, TypeScript, Python (basic), HTML, CSS
+- Frontend: React, Next.js, Tailwind CSS
+- Backend: Node.js, Express.js
+- Databases: MySQL, Firebase Firestore
+- Tools: Git, Postman, VS Code
+- Cloud: Firebase, Netlify, Vercel
+
+EXPERIENCE
+
+Frontend Developer — TCS, Hyderabad (Mar 2024 – Present)
+- Built responsive React dashboards for internal reporting tools
+- Integrated REST APIs from backend teams into UI components
+- Wrote basic SQL queries for data export tasks
+
+Intern — Startup (Aug 2023 – Feb 2024)
+- Developed landing pages using Next.js and Tailwind CSS
+- Helped with Firebase integration for user authentication
+
+EDUCATION
+B.E. in Information Technology — Osmania University (2019–2023)
+CGPA: 7.1 / 10
+
+PROJECTS
+
+Personal Portfolio Website
+- Static Next.js site deployed on Vercel
+
+To-Do App
+- React + Firebase CRUD app with real-time sync

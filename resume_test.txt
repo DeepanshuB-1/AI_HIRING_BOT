@@ -1,0 +1,50 @@
+Rahul Sharma
+Email: rahul.sharma.dev@gmail.com
+Phone: +917891234560
+Location: Bangalore, India
+LinkedIn: linkedin.com/in/rahulsharmadev
+
+SUMMARY
+Backend engineer with 3 years of experience building scalable APIs and data pipelines using Python, FastAPI, and PostgreSQL. Strong background in async programming, Docker, and cloud deployments on AWS.
+
+SKILLS
+- Languages: Python, SQL, JavaScript
+- Frameworks: FastAPI, Django, Flask
+- Databases: PostgreSQL, Redis, MongoDB
+- Tools: Docker, Git, Celery, SQLAlchemy, Alembic
+- Cloud: AWS EC2, S3, RDS
+- Other: REST APIs, WebSockets, pgvector, asyncpg
+
+EXPERIENCE
+
+Backend Engineer — Infosys, Bangalore (Jan 2023 – Present)
+- Built async REST APIs using FastAPI and SQLAlchemy 2.0 serving 50k+ daily requests
+- Designed PostgreSQL schemas with partitioning and indexing strategies reducing query time by 40%
+- Implemented Celery-based background job processing for data pipelines handling 10k records/hour
+- Containerised services with Docker and deployed on AWS ECS with CI/CD via GitHub Actions
+- Integrated Redis for session management and distributed caching
+
+Junior Developer — Wipro, Pune (Aug 2021 – Dec 2022)
+- Developed Django REST framework APIs for an internal HR management system
+- Wrote SQLAlchemy ORM models and Alembic migration scripts for schema version control
+- Participated in code reviews, wrote unit and integration tests using pytest
+- Assisted in migrating a monolith to microservices architecture
+
+EDUCATION
+B.Tech in Computer Science — VIT University, Vellore (2017–2021)
+CGPA: 8.4 / 10
+
+PROJECTS
+
+AI Resume Screener (Personal Project)
+- Built a resume screening tool using FastAPI + pgvector + Ollama (llama3.1:8b)
+- Implemented cosine similarity search on 768-dim embeddings for candidate matching
+- Deployed with Docker Compose: PostgreSQL + Redis + FastAPI stack
+
+Real-time Chat API
+- WebSocket-based chat server using FastAPI and Redis pub/sub
+- Supports 500+ concurrent connections with async message broadcasting
+
+CERTIFICATIONS
+- AWS Certified Developer – Associate (2023)
+- PostgreSQL Administration – Udemy (2022)

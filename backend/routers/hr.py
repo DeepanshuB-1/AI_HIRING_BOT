@@ -3,7 +3,7 @@ import shutil
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text
+from sqlalchemy import select, text, or_
 from sqlalchemy.exc import IntegrityError
 
 from backend.database import get_db
@@ -12,9 +12,11 @@ from backend.models.candidate import Candidate, CandidateStatus
 from backend.models.job import Job
 from backend.models.call import ScreeningCall
 from backend.models.report import ScoreReport
+from backend.models.user import User
 from backend.schemas.candidate import CandidateCreate, CandidateOut, CandidateDetail
 from backend.schemas.job import JobCreate, JobOut, JobDetail
 from backend.schemas.search import CandidateSearchResult
+from backend.auth import get_current_user
 from backend.tasks import (
     run_profile_extraction,
     run_embedding_layer,
@@ -28,21 +30,40 @@ router = APIRouter(prefix="/hr", tags=["HR Admin"])
 # ── Jobs ─────────────────────────────────────────────────────────────────────
 
 @router.post("/jobs", response_model=JobOut, status_code=201)
-async def create_job(payload: JobCreate, db: AsyncSession = Depends(get_db)):
-    job = Job(**payload.model_dump())
+async def create_job(
+    payload: JobCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    data = payload.model_dump()
+    # Use HR's registered company name if not explicitly provided
+    if not data.get("company"):
+        data["company"] = current_user.company_name
+    job = Job(**data, hr_user_id=current_user.id)
     db.add(job)
     await db.flush()
     return job
 
 
 @router.get("/jobs", response_model=list[JobOut])
-async def list_jobs(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Job).order_by(Job.created_at.desc()))
+async def list_jobs(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(Job)
+        .where(or_(Job.hr_user_id == current_user.id, Job.hr_user_id.is_(None)))
+        .order_by(Job.created_at.desc())
+    )
     return result.scalars().all()
 
 
 @router.get("/jobs/{job_id}", response_model=JobDetail)
-async def get_job(job_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def get_job(
+    job_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     job = await db.get(Job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -81,6 +102,7 @@ async def upload_candidate(
     source: str = Form("portal"),
     resume: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Upload a candidate resume — triggers Layers 1 → 1.5 → 3 → 4 via Celery."""
     suffix = Path(resume.filename).suffix.lower()
@@ -119,6 +141,7 @@ async def upload_candidate(
         pass
 
     candidate = Candidate(
+        hr_user_id=current_user.id,
         name=name,
         email=email,
         phone=phone,
@@ -155,13 +178,19 @@ async def list_candidates(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     if status and status not in CandidateStatus.__members__:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid status '{status}'. Valid values: {list(CandidateStatus.__members__)}",
         )
-    query = select(Candidate).order_by(Candidate.created_at.desc()).offset(skip).limit(limit)
+    query = (
+        select(Candidate)
+        .where(or_(Candidate.hr_user_id == current_user.id, Candidate.hr_user_id.is_(None)))
+        .order_by(Candidate.created_at.desc())
+        .offset(skip).limit(limit)
+    )
     if status:
         query = query.where(Candidate.status == status)
     result = await db.execute(query)
@@ -175,6 +204,7 @@ async def semantic_search(
     query: str = Query(..., description="Natural language query to search candidates"),
     limit: int = Query(10, ge=1, le=50),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Embed the query and return candidates ranked by cosine similarity."""
     from backend.services.embedder import embed_text, vec_to_str
@@ -213,6 +243,7 @@ async def similar_to_hires(
     job_id: uuid.UUID | None = Query(None),
     limit: int = Query(10, ge=1, le=50),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Find pending/reviewed candidates most similar to previously hired candidates."""
     hire_filter = "AND c_hire.jd_id = CAST(:job_id AS uuid)" if job_id else ""
@@ -261,6 +292,7 @@ async def cluster_candidates(
     job_id: uuid.UUID = Query(..., description="Job ID to cluster candidates for"),
     n_clusters: int = Query(3, ge=2, le=8),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """K-means clustering of candidates by resume embedding (stdlib only, no ML deps)."""
     result = await db.execute(
@@ -335,6 +367,7 @@ async def cluster_candidates(
 async def get_schedule(
     date_str: str | None = Query(None, description="Date in YYYY-MM-DD (defaults to today IST)"),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Return all scheduled calls for a given day, sorted by time."""
     from datetime import date, datetime
@@ -378,7 +411,11 @@ async def get_schedule(
 # ── Per-candidate endpoints (parameterised — must come AFTER specific paths) ──
 
 @router.get("/candidates/{candidate_id}", response_model=CandidateDetail)
-async def get_candidate(candidate_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def get_candidate(
+    candidate_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     candidate = await db.get(Candidate, candidate_id)
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
@@ -390,6 +427,7 @@ async def update_candidate_phone(
     candidate_id: uuid.UUID,
     phone: str = Form(...),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     candidate = await db.get(Candidate, candidate_id)
     if not candidate:
@@ -400,7 +438,11 @@ async def update_candidate_phone(
 
 
 @router.delete("/candidates/{candidate_id}", status_code=204)
-async def delete_candidate(candidate_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def delete_candidate(
+    candidate_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     candidate = await db.get(Candidate, candidate_id)
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
@@ -410,7 +452,11 @@ async def delete_candidate(candidate_id: uuid.UUID, db: AsyncSession = Depends(g
 
 
 @router.get("/candidates/{candidate_id}/report")
-async def get_candidate_report(candidate_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def get_candidate_report(
+    candidate_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Get the post-call score report for a candidate."""
     result = await db.execute(
         select(ScreeningCall).where(ScreeningCall.candidate_id == candidate_id)
@@ -455,6 +501,7 @@ async def find_similar_candidates(
     candidate_id: uuid.UUID,
     limit: int = Query(5, ge=1, le=20),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Find top-N candidates with the most similar resume to the given candidate."""
     candidate = await db.get(Candidate, candidate_id)

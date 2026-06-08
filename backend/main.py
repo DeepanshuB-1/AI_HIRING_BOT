@@ -7,7 +7,7 @@ from pathlib import Path
 from backend.config import settings
 from backend.database import create_tables
 from backend.redis_client import ping_redis
-from backend.routers import hr, voice
+from backend.routers import hr, voice, auth
 from backend.scheduler import start_scheduler, stop_scheduler
 import backend.models  # noqa: F401 — ensures all tables are registered before create_all()
 
@@ -47,6 +47,7 @@ audio_path.mkdir(parents=True, exist_ok=True)
 app.mount("/audio", StaticFiles(directory=str(audio_path)), name="audio")
 
 # routers
+app.include_router(auth.router)
 app.include_router(hr.router)
 app.include_router(voice.router)
 

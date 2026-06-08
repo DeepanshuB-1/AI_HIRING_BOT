@@ -1,0 +1,40 @@
+Sneha Iyer
+Email: sneha.iyer.coder@gmail.com
+Phone: +917811000002
+Location: Pune, India
+
+SUMMARY
+Python developer with 2 years of experience. Comfortable with Django and basic PostgreSQL. Looking to grow into backend architecture and cloud deployment.
+
+SKILLS
+- Languages: Python, JavaScript, HTML/CSS
+- Frameworks: Django, Flask
+- Databases: PostgreSQL, MySQL, SQLite
+- Tools: Git, Postman, Linux
+- Some exposure to: Docker, REST APIs, Celery (basic)
+
+EXPERIENCE
+
+Software Developer — Infosys, Pune (Aug 2022 – Present)
+- Developed REST APIs using Django REST Framework for an internal HR tool
+- Wrote SQL queries for reporting dashboards in PostgreSQL
+- Basic Docker usage for local development environments
+- Collaborated with frontend team to integrate APIs
+
+Intern — Wipro (Jan 2022 – Jul 2022)
+- Built a Flask-based CRUD application for inventory management
+- Wrote unit tests using Python unittest
+
+EDUCATION
+B.E. in Information Technology — Pune University (2018–2022)
+CGPA: 7.8 / 10
+
+PROJECTS
+
+Student Management System
+- Django + PostgreSQL CRUD app with authentication
+- Deployed on Heroku
+
+Weather Dashboard
+- Flask + OpenWeatherMap API
+- Simple REST client with caching using Python dict

@@ -1,0 +1,48 @@
+Arjun Mehta
+Email: arjun.mehta.dev@gmail.com
+Phone: +917811000001
+Location: Bangalore, India
+
+SUMMARY
+Backend developer with 3.5 years of experience building production-grade Python services. Strong expertise in FastAPI, PostgreSQL, Docker, and Celery. Delivered 4 major backend systems at scale.
+
+SKILLS
+- Languages: Python, SQL, Bash
+- Frameworks: FastAPI, Django REST Framework, Flask
+- Databases: PostgreSQL, Redis, MongoDB
+- DevOps: Docker, Docker Compose, GitHub Actions, AWS EC2, S3, RDS
+- Tools: Celery, asyncio, SQLAlchemy, Alembic, Git, Pytest
+- Other: REST API design, Microservices, WebSockets, pgvector
+
+EXPERIENCE
+
+Backend Engineer — Zepto, Bangalore (Jan 2022 – Present)
+- Built async FastAPI microservices handling 50k+ requests/day
+- Designed PostgreSQL schemas with complex joins; used Alembic for migrations
+- Implemented Celery + Redis task queues for order processing and notifications
+- Dockerised all services and deployed on AWS EC2 with auto-scaling groups
+- Wrote 85% test coverage using Pytest and integrated CI/CD via GitHub Actions
+
+Backend Developer Intern — Razorpay, Bangalore (Jun 2021 – Dec 2021)
+- Developed REST APIs in Django for payment webhook processing
+- Optimised slow PostgreSQL queries reducing p99 latency by 40%
+- Built Redis caching layer for frequently accessed merchant data
+
+EDUCATION
+B.Tech in Computer Science — NIT Trichy (2017–2021)
+CGPA: 8.6 / 10
+
+PROJECTS
+
+Distributed Job Scheduler
+- Built with FastAPI + Celery + Redis + PostgreSQL
+- Supports cron-style scheduling with retry logic and dead-letter queues
+- Deployed on AWS with Docker Compose
+
+Real-time Chat API
+- WebSocket server using FastAPI and Redis pub/sub
+- Handles 10k concurrent connections
+
+CERTIFICATIONS
+- AWS Certified Developer – Associate (2023)
+- Docker Certified Associate (2022)
