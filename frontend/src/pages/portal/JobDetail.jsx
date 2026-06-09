@@ -8,6 +8,23 @@ const TYPE_LABELS = {
   full_time: 'Full Time', part_time: 'Part Time',
   contract: 'Contract', internship: 'Internship',
 }
+const TYPE_COLORS = {
+  full_time: 'bg-violet-100 text-violet-700',
+  part_time: 'bg-blue-100 text-blue-700',
+  contract: 'bg-amber-100 text-amber-700',
+  internship: 'bg-green-100 text-green-700',
+}
+
+function CompanyAvatar({ name }) {
+  const initials = (name || 'Co').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
+  const colors = ['bg-violet-500', 'bg-blue-500', 'bg-emerald-500', 'bg-rose-500', 'bg-amber-500', 'bg-indigo-500']
+  const color = colors[(initials.charCodeAt(0) || 0) % colors.length]
+  return (
+    <div className={`w-16 h-16 ${color} rounded-2xl flex items-center justify-center text-white text-xl font-bold shadow-sm flex-shrink-0`}>
+      {initials}
+    </div>
+  )
+}
 
 export default function JobDetail() {
   const { id } = useParams()
@@ -20,6 +37,7 @@ export default function JobDetail() {
   const [applied, setApplied] = useState(false)
   const [error, setError] = useState('')
   const [phone, setPhone] = useState(user?.phone || '')
+  const [fileName, setFileName] = useState('')
   const fileRef = useRef()
 
   useEffect(() => {
@@ -54,25 +72,48 @@ export default function JobDetail() {
     }
   }
 
-  if (loading) return <div className="min-h-screen bg-gray-50 flex items-center justify-center text-gray-400">Loading...</div>
+  if (loading) return (
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+      <div className="flex items-center gap-3 text-slate-400">
+        <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+        Loading position...
+      </div>
+    </div>
+  )
   if (!job) return null
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-slate-50">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200">
-        <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
-          <Link to="/portal" className="text-indigo-700 font-bold text-xl">AI Hiring Bot</Link>
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-10 shadow-sm">
+        <div className="max-w-5xl mx-auto px-6 py-3 flex items-center justify-between">
+          <Link to="/portal" className="flex items-center gap-2">
+            <div className="w-8 h-8 bg-violet-600 rounded-lg flex items-center justify-center">
+              <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17H3a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v10a2 2 0 01-2 2h-2" />
+              </svg>
+            </div>
+            <span className="font-bold text-slate-900 text-sm">AI Hiring Bot</span>
+          </Link>
           <div className="flex items-center gap-3">
             {user ? (
               <>
-                <Link to="/portal/applications" className="text-sm text-indigo-600 font-medium hover:underline">My Applications</Link>
-                <span className="text-sm text-gray-500">Hi, {user.name.split(' ')[0]}</span>
+                <Link to="/portal/applications" className="text-sm text-violet-600 font-medium hover:text-violet-800">My Applications</Link>
+                <div className="w-px h-4 bg-slate-200" />
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 bg-violet-100 rounded-full flex items-center justify-center">
+                    <span className="text-xs font-bold text-violet-700">{user.name[0].toUpperCase()}</span>
+                  </div>
+                  <span className="text-sm text-slate-600 font-medium">{user.name.split(' ')[0]}</span>
+                </div>
               </>
             ) : (
               <>
-                <Link to="/portal/login" className="text-sm text-gray-600 hover:text-indigo-600 font-medium">Sign in</Link>
-                <Link to="/portal/register" className="text-sm bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 font-medium">Register</Link>
+                <Link to="/portal/login" className="text-sm text-slate-600 hover:text-violet-600 font-medium">Sign in</Link>
+                <Link to="/portal/register" className="text-sm bg-violet-600 text-white px-4 py-2 rounded-lg hover:bg-violet-700 font-medium shadow-sm">Register</Link>
               </>
             )}
           </div>
@@ -81,31 +122,58 @@ export default function JobDetail() {
 
       <div className="max-w-5xl mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Job details */}
-        <div className="lg:col-span-2 space-y-6">
-          <Link to="/portal" className="text-sm text-indigo-600 hover:underline">← Back to all jobs</Link>
+        <div className="lg:col-span-2 space-y-5">
+          <Link to="/portal" className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-violet-600 transition-colors">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+            All positions
+          </Link>
 
-          <div className="bg-white rounded-xl p-7 border border-gray-100">
-            <h1 className="text-2xl font-bold text-gray-900 mb-2">{job.title}</h1>
-            <div className="flex flex-wrap gap-3 text-sm text-gray-500 mb-5">
-              {job.company && <span className="font-semibold text-gray-700">{job.company}</span>}
-              {job.location && <span>📍 {job.location}</span>}
-              {job.min_experience > 0 && <span>💼 {job.min_experience}+ years experience</span>}
-              {job.employment_type && (
-                <span className="bg-indigo-50 text-indigo-700 px-3 py-0.5 rounded-full font-medium">
-                  {TYPE_LABELS[job.employment_type] || job.employment_type}
-                </span>
-              )}
+          {/* Job header card */}
+          <div className="bg-white rounded-2xl p-7 border border-slate-100 shadow-sm">
+            <div className="flex items-start gap-4 mb-5">
+              <CompanyAvatar name={job.company} />
+              <div className="flex-1 min-w-0">
+                <h1 className="text-2xl font-bold text-slate-900 leading-tight">{job.title}</h1>
+                <div className="flex flex-wrap gap-3 text-sm text-slate-500 mt-1.5">
+                  {job.company && <span className="font-semibold text-slate-700">{job.company}</span>}
+                  {job.location && (
+                    <span className="flex items-center gap-1">
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                      </svg>
+                      {job.location}
+                    </span>
+                  )}
+                  {job.min_experience > 0 && (
+                    <span className="flex items-center gap-1">
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                      </svg>
+                      {job.min_experience}+ years
+                    </span>
+                  )}
+                  {job.employment_type && (
+                    <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${TYPE_COLORS[job.employment_type] || 'bg-slate-100 text-slate-600'}`}>
+                      {TYPE_LABELS[job.employment_type] || job.employment_type}
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
 
-            <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-3">Job Description</h3>
-            <div className="text-sm text-gray-600 whitespace-pre-wrap leading-relaxed">{job.jd_text}</div>
+            <div className="h-px bg-slate-100 mb-5" />
+
+            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Job Description</h3>
+            <div className="text-sm text-slate-600 whitespace-pre-wrap leading-relaxed">{job.jd_text}</div>
 
             {job.required_skills?.length > 0 && (
-              <div className="mt-6">
-                <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-3">Required Skills</h3>
+              <div className="mt-6 pt-5 border-t border-slate-100">
+                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Required Skills</h3>
                 <div className="flex flex-wrap gap-2">
                   {job.required_skills.map(s => (
-                    <span key={s} className="text-xs bg-gray-100 text-gray-700 px-3 py-1 rounded-full">{s}</span>
+                    <span key={s} className="text-xs bg-slate-50 border border-slate-200 text-slate-600 px-3 py-1.5 rounded-lg font-medium">{s}</span>
                   ))}
                 </div>
               </div>
@@ -113,78 +181,112 @@ export default function JobDetail() {
           </div>
 
           {/* AI Screening notice */}
-          <div className="bg-indigo-50 rounded-xl p-5 border border-indigo-100">
-            <h3 className="font-semibold text-indigo-900 mb-2">🤖 AI-Powered Screening</h3>
-            <p className="text-sm text-indigo-700">
-              Shortlisted candidates will receive an AI phone interview conducted by our system.
-              The AI will identify itself at the start of the call. Interviews are approximately 20–25 minutes.
-            </p>
+          <div className="bg-gradient-to-br from-violet-50 to-indigo-50 rounded-2xl p-5 border border-violet-100">
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 bg-violet-100 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5">
+                <svg className="w-4 h-4 text-violet-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17H3a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v10a2 2 0 01-2 2h-2" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="font-semibold text-violet-900 mb-1">AI-Powered Screening</h3>
+                <p className="text-sm text-violet-700 leading-relaxed">
+                  Shortlisted candidates receive an AI phone interview (~20–25 min). The AI identifies itself at the start. You'll get SMS and email notifications at each stage.
+                </p>
+              </div>
+            </div>
           </div>
         </div>
 
         {/* Apply card */}
         <div className="lg:col-span-1">
-          <div className="bg-white rounded-xl p-6 border border-gray-100 sticky top-24">
+          <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm sticky top-24">
             {applied ? (
-              <div className="text-center py-4">
-                <div className="text-4xl mb-3">✅</div>
-                <h3 className="font-bold text-gray-900 mb-2">Application Submitted!</h3>
-                <p className="text-sm text-gray-500 mb-4">We'll review your application and reach out soon.</p>
+              <div className="text-center py-6">
+                <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+                <h3 className="font-bold text-slate-900 text-lg mb-2">Application Submitted!</h3>
+                <p className="text-sm text-slate-500 mb-5">We'll review your application and reach out via SMS and email.</p>
                 <Link to="/portal/applications"
-                  className="block w-full text-center bg-indigo-600 text-white py-2.5 rounded-xl text-sm font-semibold hover:bg-indigo-700">
+                  className="block w-full text-center bg-violet-600 text-white py-3 rounded-xl text-sm font-semibold hover:bg-violet-700 transition-colors shadow-sm">
                   View My Applications
                 </Link>
               </div>
             ) : (
               <>
-                <h3 className="font-semibold text-gray-800 mb-4">Apply for this position</h3>
+                <h3 className="font-bold text-slate-800 text-lg mb-1">Apply Now</h3>
+                <p className="text-xs text-slate-400 mb-5">Takes less than 2 minutes</p>
 
                 {!user && (
-                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4 text-sm text-amber-800">
-                    <Link to="/portal/login" state={{ from: `/portal/jobs/${id}` }} className="font-medium underline">Sign in</Link> or{' '}
-                    <Link to="/portal/register" className="font-medium underline">register</Link> to apply
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 text-sm text-amber-800">
+                    <Link to="/portal/login" state={{ from: `/portal/jobs/${id}` }} className="font-semibold underline">Sign in</Link> or{' '}
+                    <Link to="/portal/register" className="font-semibold underline">register</Link> to apply
                   </div>
                 )}
 
                 {error && (
-                  <div className="bg-red-50 border border-red-200 text-red-600 text-sm px-3 py-2 rounded-lg mb-4">{error}</div>
+                  <div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-600 text-sm px-3 py-2.5 rounded-xl mb-4">
+                    <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    {error}
+                  </div>
                 )}
 
                 <form onSubmit={handleApply} className="space-y-4">
                   {user && (
-                    <>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Full Name</label>
-                        <div className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-gray-50 text-gray-500">{user.name}</div>
+                    <div className="bg-slate-50 rounded-xl p-3 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 bg-violet-100 rounded-full flex items-center justify-center flex-shrink-0">
+                          <span className="text-xs font-bold text-violet-700">{user.name[0].toUpperCase()}</span>
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-slate-700">{user.name}</p>
+                          <p className="text-xs text-slate-400">{user.email}</p>
+                        </div>
                       </div>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Email</label>
-                        <div className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-gray-50 text-gray-500">{user.email}</div>
-                      </div>
-                    </>
+                    </div>
                   )}
                   <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Phone Number *</label>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Phone Number *</label>
                     <input
                       required value={phone} onChange={e => setPhone(e.target.value)}
                       placeholder="+91 98765 43210"
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                    />
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 transition-shadow" />
+                    <p className="text-xs text-slate-400 mt-1">For AI interview scheduling</p>
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Resume (PDF/DOCX) *</label>
-                    <input
-                      ref={fileRef} type="file" required accept=".pdf,.doc,.docx"
-                      className="w-full text-sm text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
-                    />
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Resume (PDF/DOCX) *</label>
+                    <label className={`flex items-center gap-3 w-full border-2 border-dashed rounded-xl px-4 py-3 cursor-pointer transition-colors ${fileName ? 'border-violet-300 bg-violet-50' : 'border-slate-200 hover:border-violet-300 hover:bg-slate-50'}`}>
+                      <svg className={`w-5 h-5 flex-shrink-0 ${fileName ? 'text-violet-500' : 'text-slate-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      <span className={`text-sm ${fileName ? 'text-violet-700 font-medium' : 'text-slate-400'}`}>
+                        {fileName || 'Click to upload resume'}
+                      </span>
+                      <input
+                        ref={fileRef} type="file" required accept=".pdf,.doc,.docx" className="hidden"
+                        onChange={e => setFileName(e.target.files[0]?.name || '')} />
+                    </label>
                   </div>
                   <button
                     type="submit" disabled={applying || !user}
-                    className="w-full bg-indigo-600 text-white py-3 rounded-xl text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors">
-                    {applying ? 'Submitting...' : user ? 'Submit Application' : 'Sign in to Apply'}
+                    className="w-full bg-violet-600 text-white py-3 rounded-xl text-sm font-bold hover:bg-violet-700 disabled:opacity-50 transition-colors shadow-sm flex items-center justify-center gap-2">
+                    {applying ? (
+                      <>
+                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        Submitting...
+                      </>
+                    ) : user ? 'Submit Application' : 'Sign in to Apply'}
                   </button>
                 </form>
-                <p className="text-xs text-gray-400 text-center mt-4">
+                <p className="text-xs text-slate-400 text-center mt-4 leading-relaxed">
                   By applying, you consent to an AI-conducted screening call
                 </p>
               </>

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { getCandidates, deleteCandidate } from '../api/client'
+import { getCandidates, deleteCandidate, getJobs } from '../api/client'
 import StatusBadge from '../components/StatusBadge'
 import UploadModal from '../components/UploadModal'
 
@@ -9,24 +9,40 @@ const STATUSES = ['all', 'pending', 'analyzed', 'pending_review', 'scheduled', '
 export default function Candidates() {
   const [searchParams, setSearchParams] = useSearchParams()
   const activeStatus = searchParams.get('status') || 'all'
+  const activeJob = searchParams.get('job') || 'all'
 
   const [candidates, setCandidates] = useState([])
+  const [jobs, setJobs] = useState([])
   const [loading, setLoading] = useState(true)
   const [showUpload, setShowUpload] = useState(false)
   const [deleting, setDeleting] = useState(null)
 
-  const load = (status) => {
+  const load = (status, jobId) => {
     setLoading(true)
     const params = { limit: 100 }
     if (status && status !== 'all') params.status = status
+    if (jobId && jobId !== 'all') params.jd_id = jobId
     getCandidates(params).then(setCandidates).finally(() => setLoading(false))
   }
 
-  useEffect(() => { load(activeStatus) }, [activeStatus])
+  useEffect(() => {
+    getJobs().then(setJobs).catch(() => {})
+  }, [])
+
+  useEffect(() => { load(activeStatus, activeJob) }, [activeStatus, activeJob])
 
   const setStatus = (s) => {
-    if (s === 'all') searchParams.delete('status')
-    else setSearchParams({ status: s })
+    const next = new URLSearchParams(searchParams)
+    if (s === 'all') next.delete('status')
+    else next.set('status', s)
+    setSearchParams(next)
+  }
+
+  const setJob = (j) => {
+    const next = new URLSearchParams(searchParams)
+    if (j === 'all') next.delete('job')
+    else next.set('job', j)
+    setSearchParams(next)
   }
 
   const handleDelete = async (id) => {
@@ -53,18 +69,34 @@ export default function Candidates() {
         </button>
       </div>
 
-      {/* Status filter tabs */}
-      <div className="flex gap-1 bg-white rounded-xl p-1 shadow-sm border border-gray-100 overflow-x-auto scrollbar-hide">
-        {STATUSES.map(s => (
-          <button key={s} onClick={() => setStatus(s)}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
-              activeStatus === s
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-gray-500 hover:text-gray-800 hover:bg-gray-50'
-            }`}>
-            {s === 'all' ? 'All' : s.replace('_', ' ').replace(/^\w/, c => c.toUpperCase())}
-          </button>
-        ))}
+      {/* Filters row */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+        {/* Status filter tabs */}
+        <div className="flex gap-1 bg-white rounded-xl p-1 shadow-sm border border-gray-100 overflow-x-auto scrollbar-hide flex-1">
+          {STATUSES.map(s => (
+            <button key={s} onClick={() => setStatus(s)}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
+                activeStatus === s
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-gray-500 hover:text-gray-800 hover:bg-gray-50'
+              }`}>
+              {s === 'all' ? 'All Statuses' : s.replace('_', ' ').replace(/^\w/, c => c.toUpperCase())}
+            </button>
+          ))}
+        </div>
+
+        {/* Job filter dropdown */}
+        {jobs.length > 0 && (
+          <select
+            value={activeJob}
+            onChange={e => setJob(e.target.value)}
+            className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 min-w-[200px]">
+            <option value="all">All Jobs</option>
+            {jobs.map(j => (
+              <option key={j.id} value={j.id}>{j.title}</option>
+            ))}
+          </select>
+        )}
       </div>
 
       {/* Table */}
@@ -72,12 +104,13 @@ export default function Candidates() {
         {loading ? (
           <p className="p-8 text-gray-400 text-center">Loading...</p>
         ) : candidates.length === 0 ? (
-          <p className="p-8 text-gray-400 text-center">No candidates in this status</p>
+          <p className="p-8 text-gray-400 text-center">No candidates found</p>
         ) : (
           <table className="w-full">
             <thead>
               <tr className="text-left bg-gray-50 border-b border-gray-100">
                 <th className="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Candidate</th>
+                <th className="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Job Applied</th>
                 <th className="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Score</th>
                 <th className="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
                 <th className="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Applied</th>
@@ -93,6 +126,11 @@ export default function Candidates() {
                       <p className="text-xs text-gray-400 mt-0.5">{c.email}</p>
                       <p className="text-xs text-gray-400">{c.phone}</p>
                     </Link>
+                  </td>
+                  <td className="px-5 py-4">
+                    {c.job_title
+                      ? <span className="text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded-full font-medium">{c.job_title}</span>
+                      : <span className="text-xs text-gray-400">—</span>}
                   </td>
                   <td className="px-5 py-4">
                     {c.match_score != null ? (

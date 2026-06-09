@@ -2,9 +2,17 @@ import axios from 'axios'
 
 const api = axios.create({ baseURL: '' }) // proxied via vite to localhost:8000
 
-// Attach HR token on every request (axios.create instances don't inherit axios.defaults)
+// Attach HR token on every request
 api.interceptors.request.use(config => {
   const token = localStorage.getItem('hr_token')
+  if (token) config.headers['Authorization'] = `Bearer ${token}`
+  return config
+})
+
+// Separate instance for candidate portal — uses candidate_token, NOT hr_token
+const portalApi = axios.create({ baseURL: '' })
+portalApi.interceptors.request.use(config => {
+  const token = localStorage.getItem('candidate_token')
   if (token) config.headers['Authorization'] = `Bearer ${token}`
   return config
 })
@@ -27,6 +35,9 @@ export const getCandidateReport = (id) =>
 export const deleteCandidate = (id) =>
   api.delete(`/hr/candidates/${id}`)
 
+export const submitDecision = (id, decision, notes = '') =>
+  api.post(`/hr/candidates/${id}/decision`, { decision, notes }).then(r => r.data)
+
 export const uploadCandidate = (formData) =>
   api.post('/hr/candidates/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
@@ -47,11 +58,13 @@ export const initiateCall = (candidateId) =>
 export const getHealth = () => api.get('/health').then(r => r.data)
 
 // ── Candidate Portal ──────────────────────────────────────────────────────────
-export const portalGetJobs = () => api.get('/api/portal/jobs').then(r => r.data)
-export const portalGetJob = (id) => api.get(`/api/portal/jobs/${id}`).then(r => r.data)
-export const portalRegister = (payload) => api.post('/api/portal/auth/register', payload).then(r => r.data)
-export const portalLogin = (payload) => api.post('/api/portal/auth/login', payload).then(r => r.data)
-export const portalMe = () => api.get('/api/portal/auth/me').then(r => r.data)
+// Public (no auth needed)
+export const portalGetJobs = () => portalApi.get('/api/portal/jobs').then(r => r.data)
+export const portalGetJob = (id) => portalApi.get(`/api/portal/jobs/${id}`).then(r => r.data)
+export const portalRegister = (payload) => portalApi.post('/api/portal/auth/register', payload).then(r => r.data)
+export const portalLogin = (payload) => portalApi.post('/api/portal/auth/login', payload).then(r => r.data)
+// Authenticated (sends candidate_token)
+export const portalMe = () => portalApi.get('/api/portal/auth/me').then(r => r.data)
 export const portalApply = (jobId, formData) =>
-  api.post(`/api/portal/apply/${jobId}`, formData, { headers: { 'Content-Type': 'multipart/form-data' } }).then(r => r.data)
-export const portalMyApplications = () => api.get('/api/portal/my-applications').then(r => r.data)
+  portalApi.post(`/api/portal/apply/${jobId}`, formData, { headers: { 'Content-Type': 'multipart/form-data' } }).then(r => r.data)
+export const portalMyApplications = () => portalApi.get('/api/portal/my-applications').then(r => r.data)

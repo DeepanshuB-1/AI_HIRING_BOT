@@ -48,7 +48,7 @@ def generate_next_response(call_state: dict) -> tuple[str, bool]:
         for t in recent
     )
 
-    prompt = f"""You are Alex, an AI phone interviewer. Continue the interview naturally.
+    prompt = f"""You are Alex, a warm and patient AI phone interviewer. Continue the conversation naturally.
 
 Recent conversation:
 {history}
@@ -56,12 +56,14 @@ Recent conversation:
 Next question to ask: "{next_q_text}"
 
 Instructions:
-- In 1 sentence, briefly acknowledge the candidate's last answer
-- Then ask the next question exactly as written
-- Keep the total response under 4 sentences
-- Return ONLY the spoken text"""
+- In 1 short sentence, genuinely acknowledge the candidate's last answer (vary your acknowledgment — use phrases like "That's really helpful", "Great point", "I appreciate you sharing that", "Good to know", "Thanks for walking me through that" — don't always say the same thing)
+- Then transition naturally into the next question (e.g., "Moving on...", "Next I'd like to ask...", "Let's talk about...")
+- Ask the question clearly and in full — do NOT cut it short
+- Keep total response under 4 sentences
+- Sound human and conversational, not robotic
+- Return ONLY the spoken text, no labels, no quotes"""
 
-    response = ollama_chat(prompt, model=INTERVIEW_MODEL, expect_json=False, temperature=0.4)
+    response = ollama_chat(prompt, model=INTERVIEW_MODEL, expect_json=False, temperature=0.5)
     return response, False
 
 

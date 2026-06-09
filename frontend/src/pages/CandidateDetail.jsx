@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { getCandidate, getCandidateReport, initiateCall } from '../api/client'
+import { getCandidate, getCandidateReport, initiateCall, submitDecision } from '../api/client'
 import StatusBadge from '../components/StatusBadge'
 import ScoreBar from '../components/ScoreBar'
 
@@ -18,15 +18,38 @@ export default function CandidateDetail() {
   const [loadingReport, setLoadingReport] = useState(false)
   const [calling, setCalling] = useState(false)
   const [error, setError] = useState('')
+  const [decisionLoading, setDecisionLoading] = useState(false)
+  const [decisionNotes, setDecisionNotes] = useState('')
+  const [decisionSent, setDecisionSent] = useState(null) // the decision that was sent
 
   useEffect(() => {
     getCandidate(id).then(setCandidate)
     setLoadingReport(true)
     getCandidateReport(id)
-      .then(setReport)
+      .then(r => { setReport(r); if (r.hr_notes) setDecisionNotes(r.hr_notes) })
       .catch(() => {})
       .finally(() => setLoadingReport(false))
   }, [id])
+
+  const handleDecision = async (decision) => {
+    if (!confirm(`Send "${decision}" decision to ${candidate.name}? This will email them immediately.`)) return
+    setDecisionLoading(true)
+    try {
+      await submitDecision(id, decision, decisionNotes)
+      setDecisionSent(decision)
+      // refresh candidate + report to reflect updated status / hr_override
+      const [freshCandidate, freshReport] = await Promise.all([
+        getCandidate(id),
+        getCandidateReport(id).catch(() => report),
+      ])
+      setCandidate(freshCandidate)
+      setReport(freshReport)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to submit decision')
+    } finally {
+      setDecisionLoading(false)
+    }
+  }
 
   const handleCall = async () => {
     if (!confirm(`Manually trigger call to ${candidate.name}?`)) return
@@ -42,7 +65,7 @@ export default function CandidateDetail() {
   if (!candidate) return <div className="p-8 text-gray-400">Loading...</div>
 
   const profile = candidate.profile_json || {}
-  const canCall = ['analyzed', 'pending_review'].includes(candidate.status) && candidate.consent_given
+  const canCall = ['analyzed', 'pending_review', 'scheduled'].includes(candidate.status) && candidate.consent_given
 
   return (
     <div className="p-8 space-y-6">
@@ -90,7 +113,7 @@ export default function CandidateDetail() {
           {canCall && (
             <button onClick={handleCall} disabled={calling}
               className="w-full py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
-              {calling ? 'Calling...' : '📞 Trigger Call Now'}
+              {calling ? 'Calling...' : candidate.status === 'scheduled' ? '📞 Call Now (Missed Slot)' : '📞 Trigger Call Now'}
             </button>
           )}
           {['analyzed', 'pending_review'].includes(candidate.status) && !candidate.consent_given && (
@@ -111,7 +134,7 @@ export default function CandidateDetail() {
                 </div>
                 <div className="text-sm text-gray-400 mt-1">Overall Score</div>
               </div>
-              <ScoreBar label="Vector Similarity (40%)" score={Math.round((candidate.vector_score || 0) * 100)} />
+              <ScoreBar label="Vector Similarity (40%)" score={Math.round(candidate.vector_score || 0)} />
               <ScoreBar label="LLM Assessment (60%)" score={Math.round(candidate.llm_score || 0)} />
             </div>
           ) : (
@@ -198,6 +221,55 @@ export default function CandidateDetail() {
             {report.ai_reasoning && (
               <p className="mt-3 text-sm opacity-80">{report.ai_reasoning}</p>
             )}
+          </div>
+
+          {/* HR Decision Panel */}
+          <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="font-semibold text-gray-800">HR Decision</h2>
+                <p className="text-xs text-gray-400 mt-0.5">Select a decision to notify the candidate by email immediately</p>
+              </div>
+              {(report.hr_override || decisionSent) && (
+                <span className={`text-xs font-bold px-3 py-1.5 rounded-full ${
+                  (report.hr_override || decisionSent) === 'HIRE' ? 'bg-green-100 text-green-700' :
+                  (report.hr_override || decisionSent) === 'SHORTLIST' ? 'bg-blue-100 text-blue-700' :
+                  (report.hr_override || decisionSent) === 'HOLD' ? 'bg-yellow-100 text-yellow-700' :
+                  'bg-red-100 text-red-600'
+                }`}>
+                  ✓ Decision sent: {report.hr_override || decisionSent}
+                </span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+              {[
+                { d: 'HIRE',      label: '✓ Hire',       cls: 'border-green-300 text-green-700 hover:bg-green-50',  active: 'bg-green-500 text-white border-green-500' },
+                { d: 'SHORTLIST', label: '→ Shortlist',  cls: 'border-blue-300 text-blue-700 hover:bg-blue-50',    active: 'bg-blue-500 text-white border-blue-500'  },
+                { d: 'HOLD',      label: '⏸ Hold',       cls: 'border-yellow-300 text-yellow-700 hover:bg-yellow-50', active: 'bg-yellow-500 text-white border-yellow-500' },
+                { d: 'REJECT',    label: '✕ Reject',     cls: 'border-red-300 text-red-600 hover:bg-red-50',       active: 'bg-red-500 text-white border-red-500'    },
+              ].map(({ d, label, cls, active }) => {
+                const isCurrent = (report.hr_override || decisionSent) === d
+                return (
+                  <button
+                    key={d}
+                    onClick={() => handleDecision(d)}
+                    disabled={decisionLoading}
+                    className={`py-2.5 px-4 rounded-lg border-2 text-sm font-semibold transition-all disabled:opacity-50 ${isCurrent ? active : cls}`}
+                  >
+                    {decisionLoading && isCurrent ? 'Sending...' : label}
+                  </button>
+                )
+              })}
+            </div>
+
+            <textarea
+              value={decisionNotes}
+              onChange={e => setDecisionNotes(e.target.value)}
+              placeholder="Optional HR notes (saved to report, not sent to candidate)..."
+              rows={2}
+              className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-300 resize-none"
+            />
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

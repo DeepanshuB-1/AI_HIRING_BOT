@@ -23,6 +23,11 @@ def send_sms(to_phone: str, message: str) -> bool:
     if not settings.twilio_account_sid or not settings.twilio_auth_token or not settings.twilio_phone_number:
         logger.warning("Twilio credentials not configured — SMS not sent")
         return False
+    # Twilio trial prepends ~38-char prefix; hard-cap at 120 chars to stay in 1 segment
+    if len(message) > 120:
+        logger.error(f"SMS message too long ({len(message)} chars) — blocked before sending: {message[:80]}...")
+        return False
+    logger.info(f"SMS to {to_phone} ({len(message)} chars): {message}")
     try:
         from twilio.rest import Client
         client = Client(settings.twilio_account_sid, settings.twilio_auth_token)

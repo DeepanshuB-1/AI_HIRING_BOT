@@ -1,7 +1,7 @@
 import uuid
 import shutil
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, File, Form, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
@@ -10,7 +10,7 @@ from backend.database import get_db
 from backend.config import settings
 from backend.models.candidate import Candidate, CandidateStatus
 from backend.models.job import Job
-from backend.models.call import ScreeningCall
+from backend.models.call import ScreeningCall, CallStatus
 from backend.models.report import ScoreReport
 from backend.models.user import User
 from backend.schemas.candidate import CandidateCreate, CandidateOut, CandidateDetail
@@ -175,6 +175,7 @@ async def upload_candidate(
 @router.get("/candidates", response_model=list[CandidateOut])
 async def list_candidates(
     status: str | None = None,
+    jd_id: uuid.UUID | None = Query(None),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -186,15 +187,24 @@ async def list_candidates(
             detail=f"Invalid status '{status}'. Valid values: {list(CandidateStatus.__members__)}",
         )
     query = (
-        select(Candidate)
+        select(Candidate, Job.title.label("job_title"))
+        .outerjoin(Job, Candidate.jd_id == Job.id)
         .where(Candidate.hr_user_id == current_user.id)
         .order_by(Candidate.created_at.desc())
         .offset(skip).limit(limit)
     )
     if status:
         query = query.where(Candidate.status == status)
+    if jd_id:
+        query = query.where(Candidate.jd_id == jd_id)
     result = await db.execute(query)
-    return result.scalars().all()
+    rows = result.all()
+    out = []
+    for candidate, job_title in rows:
+        d = CandidateOut.model_validate(candidate)
+        d.job_title = job_title
+        out.append(d)
+    return out
 
 
 # ── pgvector-powered search endpoints (MUST come before /{candidate_id}) ─────
@@ -384,25 +394,28 @@ async def get_schedule(
         target_date = datetime.now(IST).date()
 
     result = await db.execute(
-        select(ScreeningCall).where(
+        select(ScreeningCall, Candidate)
+        .join(Candidate, ScreeningCall.candidate_id == Candidate.id)
+        .where(
             and_(
                 ScreeningCall.scheduled_date == target_date,
                 ScreeningCall.scheduled_time.isnot(None),
+                Candidate.hr_user_id == current_user.id,
+                ScreeningCall.status != CallStatus.failed,  # hide cancelled/failed calls
             )
         ).order_by(ScreeningCall.scheduled_time)
     )
-    calls = result.scalars().all()
+    rows_raw = result.all()
 
     rows = []
-    for c in calls:
-        candidate = await db.get(Candidate, c.candidate_id)
+    for c, candidate in rows_raw:
         rows.append({
             "call_id": str(c.id),
             "scheduled_time": c.scheduled_time.strftime("%H:%M") if c.scheduled_time else None,
             "status": c.status,
             "candidate_id": str(c.candidate_id),
-            "candidate_name": candidate.name if candidate else "unknown",
-            "candidate_phone": candidate.phone if candidate else None,
+            "candidate_name": candidate.name,
+            "candidate_phone": candidate.phone,
         })
 
     return {"date": target_date.isoformat(), "total": len(rows), "calls": rows}
@@ -499,6 +512,77 @@ async def get_candidate_report(
         "hr_notes": report.hr_notes,
         "created_at": report.created_at,
     }
+
+
+@router.post("/candidates/{candidate_id}/decision")
+async def submit_decision(
+    candidate_id: uuid.UUID,
+    decision: str = Body(..., embed=True),
+    notes: str = Body("", embed=True),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """HR submits final decision (HIRE/SHORTLIST/HOLD/REJECT) and notifies the candidate by email."""
+    from backend.models.report import AIRecommendation
+    from backend.tasks import send_email_task
+    from backend.notifications.templates import (
+        hire_email_html, shortlist_email_html,
+        hold_email_html, rejection_email_html,
+    )
+
+    decision = decision.upper()
+    if decision not in ("HIRE", "SHORTLIST", "HOLD", "REJECT"):
+        raise HTTPException(status_code=400, detail="decision must be HIRE, SHORTLIST, HOLD, or REJECT")
+
+    candidate = await db.get(Candidate, candidate_id)
+    if not candidate or candidate.hr_user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+
+    # Update hr_override on the report
+    report_result = await db.execute(
+        select(ScoreReport)
+        .join(ScreeningCall, ScoreReport.call_id == ScreeningCall.id)
+        .where(ScreeningCall.candidate_id == candidate_id)
+        .order_by(ScoreReport.created_at.desc())
+    )
+    report = report_result.scalars().first()
+    if report:
+        report.hr_override = AIRecommendation(decision)
+        report.hr_notes = notes or report.hr_notes
+
+    # Update candidate status
+    if decision == "REJECT":
+        candidate.status = CandidateStatus.rejected
+    # HIRE / SHORTLIST / HOLD keep status as "completed" — hr_override carries the decision
+
+    # Cancel any pending scheduled calls — decision is final, no more auto-dialling
+    pending_calls_result = await db.execute(
+        select(ScreeningCall).where(
+            ScreeningCall.candidate_id == candidate_id,
+            ScreeningCall.status == CallStatus.pending,
+        )
+    )
+    for sc in pending_calls_result.scalars().all():
+        sc.status = CallStatus.failed
+
+    await db.commit()
+
+    # Send decision email to candidate
+    job = await db.get(Job, candidate.jd_id) if candidate.jd_id else None
+    role = job.title if job else "the applied role"
+
+    if decision == "HIRE":
+        subject, html_body = hire_email_html(candidate.name, role, current_user.company_name)
+    elif decision == "SHORTLIST":
+        subject, html_body = shortlist_email_html(candidate.name, role, current_user.company_name)
+    elif decision == "HOLD":
+        subject, html_body = hold_email_html(candidate.name, role, current_user.company_name)
+    else:
+        subject, html_body = rejection_email_html(candidate.name, role, current_user.company_name)
+
+    send_email_task.delay(candidate.email, subject, html_body)
+
+    return {"ok": True, "decision": decision, "email_sent_to": candidate.email}
 
 
 @router.get("/candidates/{candidate_id}/similar", response_model=list[CandidateSearchResult])

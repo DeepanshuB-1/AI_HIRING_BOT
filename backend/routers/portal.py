@@ -5,7 +5,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, func
 from pydantic import BaseModel
 from typing import Optional
 from jose import JWTError, jwt
@@ -268,7 +268,7 @@ async def my_applications(
     result = await db.execute(
         select(Candidate, Job)
         .join(Job, Candidate.jd_id == Job.id, isouter=True)
-        .where(Candidate.email == current.email)
+        .where(func.lower(Candidate.email) == current.email.lower().strip())
         .order_by(Candidate.created_at.desc())
     )
     rows = result.all()
@@ -276,6 +276,7 @@ async def my_applications(
     return [
         {
             "id": str(c.id),
+            "jd_id": str(c.jd_id) if c.jd_id else None,
             "job_title": j.title if j else "Unknown Position",
             "company": (j.company if j else None) or settings.company_name,
             "location": j.location if j else None,

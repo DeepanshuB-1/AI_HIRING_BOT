@@ -33,33 +33,90 @@ def _twiml(content: str) -> Response:
     )
 
 
-def _play_or_say(text: str) -> str:
-    """Return TwiML play+gather block. Falls back to <Say> if ElevenLabs TTS fails."""
+def _say(text: str) -> str:
+    """Return a TwiML <Say> or <Play> block (no Gather)."""
     audio_path = synthesize(text)
     if audio_path:
-        play_block = f'<Play>{settings.webhook_base_url}{audio_path}</Play>'
-    else:
-        safe = html.escape(text)
-        play_block = f'<Say voice="alice" language="en-IN">{safe}</Say>'
+        return f'<Play>{settings.webhook_base_url}{audio_path}</Play>'
+    return f'<Say voice="alice" language="en-IN">{html.escape(text)}</Say>'
+
+
+def _play_or_say(text: str, speech_timeout: str = "3", start_timeout: int = 20) -> str:
+    """
+    Wrap speech in a <Gather> so Twilio listens DURING + AFTER playback.
+    speech_timeout: seconds of silence that signals end-of-answer (default 3s).
+    start_timeout: seconds to wait for the candidate to start speaking (default 20s).
+    Audio is placed INSIDE the Gather so speech during playback is captured too.
+    """
     respond_url = f"{settings.webhook_base_url}/voice/respond"
-    gather = (
-        f'<Gather input="speech" action="{respond_url}" '
-        f'method="POST" speechTimeout="auto" language="en-IN" timeout="10">'
+    inner = _say(text)
+    return (
+        f'<Gather input="speech" action="{respond_url}" method="POST" '
+        f'speechTimeout="{speech_timeout}" timeout="{start_timeout}" '
+        f'language="en-IN" enhanced="true">'
+        f'{inner}'
         f'</Gather>'
         f'<Redirect method="POST">{respond_url}</Redirect>'
     )
-    return play_block + gather
+
+
+def _thinking_twiml() -> str:
+    """
+    TwiML for when candidate asks for time to think.
+    Uses <Pause> between <Say> blocks so every ~12s the bot gently reminds
+    the candidate it's still listening — without hanging up.
+    """
+    respond_url = f"{settings.webhook_base_url}/voice/respond"
+    return (
+        f'<Gather input="speech" action="{respond_url}" method="POST" '
+        f'speechTimeout="3" timeout="50" language="en-IN" enhanced="true">'
+        f'<Say voice="alice" language="en-IN">Of course, take all the time you need. I\'m right here.</Say>'
+        f'<Pause length="12"/>'
+        f'<Say voice="alice" language="en-IN">Whenever you\'re ready, I\'m listening.</Say>'
+        f'<Pause length="12"/>'
+        f'<Say voice="alice" language="en-IN">I\'m still here, no rush at all.</Say>'
+        f'<Pause length="12"/>'
+        f'<Say voice="alice" language="en-IN">Please share your thoughts whenever you\'re ready.</Say>'
+        f'</Gather>'
+        f'<Redirect method="POST">{respond_url}</Redirect>'
+    )
+
+
+# Intent keywords
+_REPEAT_KW  = {"repeat", "again", "pardon", "come again", "say that", "catch that",
+                "didn't hear", "couldn't hear", "missed that", "what did you say"}
+_THINK_KW   = {"moment", "second", "minute", "think", "hold on", "one sec", "give me",
+                "let me", "need time", "just a", "few seconds", "bit of time", "need a bit"}
+_FILLERS    = {"um", "uh", "hmm", "err", "ah", "uhh", "umm", "erm"}
+
+
+def _detect_intent(speech: str) -> str:
+    """Classify candidate speech: repeat | think | unclear | answer."""
+    lower = speech.lower()
+    meaningful = [w for w in lower.split() if w not in _FILLERS]
+
+    if any(kw in lower for kw in _REPEAT_KW):
+        return "repeat"
+    if len(meaningful) <= 7 and any(kw in lower for kw in _THINK_KW):
+        return "think"
+    if len(meaningful) < 3:
+        return "unclear"
+    return "answer"
 
 
 # ── Slot availability helper ─────────────────────────────────────────────────
 
 async def _get_available_slots(db: AsyncSession) -> dict[str, list[str]]:
-    """Return {iso_date: [HH:MM, ...]} for available 30-min slots over the next 3 days (IST)."""
+    """Return {iso_date: [HH:MM, ...]} for available 30-min slots over the next 5 days (IST).
+    - 30-min buffer from now (enough prep time, not too restrictive)
+    - Skips today if fewer than 2 slots remain (avoids rushed same-day booking)
+    - Shows up to 5 days so candidates always have plenty of choice
+    """
     now = datetime.now(IST)
-    min_start = now + timedelta(hours=1)  # 1-hr buffer so candidate can prepare
+    min_start = now + timedelta(minutes=30)
 
     booked: set[tuple] = set()
-    for offset in range(4):
+    for offset in range(6):
         check_date = (now + timedelta(days=offset)).date()
         result = await db.execute(
             select(ScreeningCall).where(
@@ -77,7 +134,7 @@ async def _get_available_slots(db: AsyncSession) -> dict[str, list[str]]:
                 booked.add((check_date, c.scheduled_time.hour, c.scheduled_time.minute))
 
     available: dict[str, list[str]] = {}
-    for offset in range(3):
+    for offset in range(5):
         d = (now + timedelta(days=offset)).date()
         slots = []
         for hour in range(settings.call_window_start, settings.call_window_end):
@@ -85,6 +142,9 @@ async def _get_available_slots(db: AsyncSession) -> dict[str, list[str]]:
                 slot_dt = datetime(d.year, d.month, d.day, hour, minute, tzinfo=IST)
                 if slot_dt > min_start and (d, hour, minute) not in booked:
                     slots.append(f"{hour:02d}:{minute:02d}")
+        # Skip today if fewer than 2 slots remain — don't rush candidates
+        if offset == 0 and len(slots) < 2:
+            continue
         if slots:
             available[d.isoformat()] = slots
 
@@ -113,7 +173,7 @@ def _slot_picker_html(candidate_id: str, name: str, role: str, slots: dict[str, 
         </div>"""
 
     if not day_sections:
-        day_sections = '<p class="no-slots">No slots available in the next 3 days. Please contact HR.</p>'
+        day_sections = '<p class="no-slots">No slots available in the next 5 days. Please contact HR directly.</p>'
         submit_btn = ""
     else:
         submit_btn = '<button type="submit" class="confirm-btn">Confirm My Interview Slot &#8594;</button>'
@@ -148,7 +208,7 @@ def _slot_picker_html(candidate_id: str, name: str, role: str, slots: dict[str, 
   <div class="card">
     <div class="logo">AI Hiring Bot</div>
     <h1>Schedule Your Interview</h1>
-    <p class="subtitle">Hi <strong>{name}</strong>! You've been shortlisted for <strong>{role}</strong>. Pick a 30-minute slot — our AI interviewer will call you at that exact time.</p>
+    <p class="subtitle">Hi <strong>{name}</strong>! You&#39;ve been shortlisted for the role of <strong>{role}</strong>. Pick a 30-minute slot &mdash; our AI interviewer will call you at that exact time.</p>
     <form method="POST" action="/voice/consent/{candidate_id}/schedule">
       {day_sections}
       {submit_btn}
@@ -304,7 +364,27 @@ async def initiate_screening(candidate_id: uuid.UUID, db: AsyncSession = Depends
     if not candidate.questions_json:
         raise HTTPException(status_code=400, detail="No questions generated yet — pipeline still running")
 
-    call_record = ScreeningCall(candidate_id=candidate.id, status=CallStatus.dialing)
+    # Cancel any existing pending scheduled calls for this candidate so the
+    # schedule page doesn't keep showing them as "Pending" after a manual trigger.
+    stale = await db.execute(
+        select(ScreeningCall).where(
+            and_(
+                ScreeningCall.candidate_id == candidate.id,
+                ScreeningCall.status == CallStatus.pending,
+            )
+        )
+    )
+    for stale_call in stale.scalars().all():
+        stale_call.status = CallStatus.failed
+
+    from datetime import date as _date, time as _time
+    now_ist = datetime.now(IST)
+    call_record = ScreeningCall(
+        candidate_id=candidate.id,
+        status=CallStatus.dialing,
+        scheduled_date=now_ist.date(),
+        scheduled_time=_time(now_ist.hour, now_ist.minute),
+    )
     db.add(call_record)
     await db.flush()
 
@@ -319,15 +399,16 @@ async def initiate_screening(candidate_id: uuid.UUID, db: AsyncSession = Depends
         raise HTTPException(status_code=502, detail=f"Twilio error: {exc}")
 
     call_record.twilio_call_sid = call_sid
-    candidate.status = CandidateStatus.scheduled
+    candidate.status = CandidateStatus.in_call
     await db.commit()
 
-    # Notify candidate via email that call is coming
+    # Notify candidate via email with scheduling link
     from backend.tasks import send_email_task
     from backend.notifications.templates import interview_invite_email_html
     job = await db.get(Job, candidate.jd_id)
     role = job.title if job else "the applied role"
-    subject, html_body = interview_invite_email_html(candidate.name, role, settings.company_name)
+    consent_url = f"{settings.webhook_base_url}/voice/consent/{candidate.id}"
+    subject, html_body = interview_invite_email_html(candidate.name, role, settings.company_name, consent_url)
     send_email_task.delay(candidate.email, subject, html_body)
 
     return {"call_sid": call_sid, "call_id": str(call_record.id), "status": "initiated"}
@@ -378,11 +459,14 @@ async def voice_start(
         "questions": questions,
         "question_index": 0,
         "transcript": [],
+        "silence_count": 0,
+        "unclear_count": 0,
     })
 
     opening_text = generate_opening(candidate.name, role, settings.company_name)
     append_transcript(CallSid, "ai", opening_text)
-    return _twiml(_play_or_say(opening_text))
+    # Longer start_timeout on opening — candidate may need a moment to respond
+    return _twiml(_play_or_say(opening_text, speech_timeout="3", start_timeout=30))
 
 
 @router.post("/respond")
@@ -391,34 +475,88 @@ async def voice_respond(
     SpeechResult: str = Form(default=""),
 ):
     """
-    Twilio calls this after each speech input from the candidate.
-    Generates the next AI response and returns TwiML.
+    Twilio calls this after each speech input (or timeout).
+    Handles: repeat-question, thinking-time, unclear speech, silence, normal answers.
     """
     state = get_state(CallSid)
     if not state:
         return _twiml("<Say>Your session has expired. Thank you for your time. Goodbye.</Say><Hangup/>")
 
-    # record candidate answer and advance question index
-    if SpeechResult.strip():
-        append_transcript(CallSid, "candidate", SpeechResult.strip())
-        current_index = state.get("question_index", 0)
-        update_state(CallSid, {"question_index": current_index + 1})
-        state = get_state(CallSid)
+    speech = SpeechResult.strip()
+    q_index   = state.get("question_index", 0)
+    questions = state.get("questions", [])
 
-    response_text, is_closing = generate_next_response(state)
+    # Current question text (used for repeat intent)
+    if q_index < len(questions):
+        q = questions[q_index]
+        current_q_text = q.get("question", q) if isinstance(q, dict) else str(q)
+    else:
+        current_q_text = ""
+
+    # ── No speech detected (timeout) ────────────────────────────────────────
+    if not speech:
+        silence_count = state.get("silence_count", 0) + 1
+        update_state(CallSid, {"silence_count": silence_count})
+
+        if silence_count >= 3:
+            # 3 consecutive silences → check in / close gracefully
+            msg = ("I haven't been able to hear you for a while. "
+                   "If you'd like to continue please say something now, "
+                   "otherwise I'll wrap up — thank you so much for your time.")
+            update_state(CallSid, {"silence_count": 0})
+        else:
+            msg = "I didn't catch that — could you speak a little louder or closer to the phone?"
+        append_transcript(CallSid, "ai", msg)
+        return _twiml(_play_or_say(msg))
+
+    # Reset silence counter on any speech
+    update_state(CallSid, {"silence_count": 0})
+
+    # ── Intent detection ────────────────────────────────────────────────────
+    intent = _detect_intent(speech)
+
+    # Repeat-question intent — don't advance, replay question
+    if intent == "repeat" and current_q_text:
+        msg = f"Sure! Here's the question again: {current_q_text}"
+        append_transcript(CallSid, "ai", msg)
+        return _twiml(_play_or_say(msg, speech_timeout="4", start_timeout=30))
+
+    # Thinking-time intent — don't advance, give them space with reminders
+    if intent == "think":
+        append_transcript(CallSid, "candidate", speech)
+        return _twiml(_thinking_twiml())
+
+    # Unclear / too short answer — ask to repeat without advancing
+    if intent == "unclear":
+        unclear_count = state.get("unclear_count", 0) + 1
+        update_state(CallSid, {"unclear_count": unclear_count})
+        if unclear_count >= 2:
+            # Two failed attempts — accept what we have and move on
+            update_state(CallSid, {"unclear_count": 0})
+            append_transcript(CallSid, "candidate", speech or "[unclear]")
+            update_state(CallSid, {"question_index": q_index + 1})
+            state = get_state(CallSid)
+            response_text, is_closing = generate_next_response(state)
+        else:
+            msg = "I'm sorry, I didn't quite catch that — could you say that again, a little slower?"
+            append_transcript(CallSid, "ai", msg)
+            return _twiml(_play_or_say(msg, speech_timeout="4"))
+
+    # ── Normal answer — record, advance, generate next response ─────────────
+    if intent == "answer":
+        update_state(CallSid, {"unclear_count": 0})
+        append_transcript(CallSid, "candidate", speech)
+        update_state(CallSid, {"question_index": q_index + 1})
+        state = get_state(CallSid)
+        response_text, is_closing = generate_next_response(state)
+
     append_transcript(CallSid, "ai", response_text)
 
     if is_closing:
-        audio_path = synthesize(response_text)
-        play_block = (
-            f'<Play>{settings.webhook_base_url}{audio_path}</Play>'
-            if audio_path
-            else f'<Say voice="alice" language="en-IN">{html.escape(response_text)}</Say>'
-        )
         run_report_gen.delay(CallSid)
-        return _twiml(play_block + "<Hangup/>")
+        return _twiml(_say(response_text) + "<Hangup/>")
 
-    return _twiml(_play_or_say(response_text))
+    return _twiml(_play_or_say(response_text, speech_timeout="4", start_timeout=25))
 
 
 @router.post("/status")
@@ -458,12 +596,17 @@ async def voice_status(
     # retry logic for no-answer / busy — send reschedule SMS, don't auto-dial
     candidate = await db.get(Candidate, call.candidate_id)
     if candidate and call.status == CallStatus.no_answer:
+        reschedule_url = f"{settings.webhook_base_url}/voice/consent/{candidate.id}"
+        job = await db.get(Job, candidate.jd_id) if candidate.jd_id else None
+        role = job.title if job else "the applied role"
         if call.retry_count < settings.call_retry_count:
             call.retry_count += 1
-            candidate.status = CandidateStatus.analyzed
-            from backend.notifications.templates import reschedule_sms
-            reschedule_url = f"{settings.webhook_base_url}/voice/consent/{candidate.id}"
-            send_sms_task.delay(candidate.phone, reschedule_sms(candidate.name, reschedule_url))
+            candidate.status = CandidateStatus.scheduled
+            from backend.notifications.templates import reschedule_sms, reschedule_email_html
+            from backend.tasks import send_email_task
+            send_sms_task.delay(candidate.phone, reschedule_sms(candidate.name))
+            subject, html = reschedule_email_html(candidate.name, role, settings.company_name, reschedule_url)
+            send_email_task.delay(candidate.email, subject, html)
         else:
             candidate.status = CandidateStatus.rejected
             from backend.notifications.templates import unreachable_sms

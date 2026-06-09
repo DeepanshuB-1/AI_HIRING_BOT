@@ -19,6 +19,7 @@ class CandidateOut(BaseModel):
     email: str
     phone: str
     jd_id: Optional[UUID] = None
+    job_title: Optional[str] = None
     status: CandidateStatus
     match_score: Optional[int] = None
     quick_match_score: Optional[float] = None

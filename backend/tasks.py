@@ -177,11 +177,17 @@ def run_jd_scoring(self, candidate_id: str, jd_text: str):
             send_email_task.delay(result["_email"], subject, html)
 
         else:
-            # Passed threshold — send SMS consent link so candidate can approve the call
+            # Passed threshold — email has the consent link (no URL in SMS to stay under segment limit)
             from .config import settings as _s
-            from .notifications.templates import consent_sms
+            from .notifications.templates import consent_sms, interview_invite_email_html
             consent_url = f"{_s.webhook_base_url}/voice/consent/{result['_cid']}"
-            send_sms_task.delay(result["_phone"], consent_sms(result["_name"], consent_url))
+            # Short SMS nudge (no URL — Twilio trial prefix + long ngrok URL = segment overflow)
+            send_sms_task.delay(result["_phone"], consent_sms(result["_name"]))
+            # Email with the full consent booking link
+            subject, html = interview_invite_email_html(
+                result["_name"], "the applied role", _s.company_name, consent_url
+            )
+            send_email_task.delay(result["_email"], subject, html)
 
         return result
     except Exception as exc:

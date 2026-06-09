@@ -54,11 +54,13 @@ async def fire_scheduled_calls():
         )
         all_pending_today = due_result.scalars().all()
 
+        # Fire calls scheduled for right now OR overdue by up to 30 minutes
+        # (catches server restarts / laptop-sleep gaps)
+        grace_cutoff = (now - timedelta(minutes=30)).time()
         due_calls = [
             c for c in all_pending_today
             if c.scheduled_time
-            and c.scheduled_time.hour == current_hour
-            and c.scheduled_time.minute == current_minute
+            and grace_cutoff <= c.scheduled_time <= now.time()
         ]
 
         for call in due_calls:
@@ -83,6 +85,44 @@ async def fire_scheduled_calls():
             except Exception as exc:
                 await db.rollback()
                 logger.error(f"[scheduler] Failed to fire call for {candidate.name}: {exc}")
+
+
+async def cleanup_stuck_calls():
+    """
+    Every 5 minutes: reset any call stuck in dialing/in_progress for >15 min.
+    Happens when Twilio status webhook never fires (TTS failure, network drop, etc.)
+    """
+    from sqlalchemy import select
+    from backend.database import AsyncSessionLocal
+    from backend.models.candidate import Candidate, CandidateStatus
+    from backend.models.call import ScreeningCall, CallStatus
+
+    now = datetime.now(IST)
+    cutoff = now - timedelta(minutes=15)
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ScreeningCall).where(
+                ScreeningCall.status.in_([CallStatus.dialing, CallStatus.in_progress])
+            )
+        )
+        stuck = [
+            c for c in result.scalars().all()
+            if (c.call_started_at or c.created_at) < cutoff.replace(tzinfo=None)
+        ]
+
+        for call in stuck:
+            call.status = CallStatus.failed
+            candidate = await db.get(Candidate, call.candidate_id)
+            if candidate and candidate.status == CandidateStatus.in_call:
+                candidate.status = CandidateStatus.scheduled
+            logger.warning(
+                f"[scheduler] Cleaned up stuck call {call.id} "
+                f"(was {call.status.value}) — candidate reset to scheduled"
+            )
+
+        if stuck:
+            await db.commit()
 
 
 async def warn_upcoming_calls():
@@ -132,6 +172,13 @@ def start_scheduler():
         fire_scheduled_calls,
         IntervalTrigger(minutes=1),
         id="fire_scheduled_calls",
+        replace_existing=True,
+    )
+    # Reset calls stuck in dialing/in_progress every 5 minutes
+    scheduler.add_job(
+        cleanup_stuck_calls,
+        IntervalTrigger(minutes=5),
+        id="cleanup_stuck_calls",
         replace_existing=True,
     )
     # Log upcoming calls every 30 min for visibility

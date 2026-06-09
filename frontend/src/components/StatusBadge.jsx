@@ -1,21 +1,21 @@
 const config = {
-  pending:        { label: 'Pending',        cls: 'bg-gray-100 text-gray-600'    },
-  analyzed:       { label: 'Analyzed',       cls: 'bg-blue-100 text-blue-700'    },
-  pending_review: { label: 'Review',         cls: 'bg-yellow-100 text-yellow-700'},
-  scheduled:      { label: 'Scheduled',      cls: 'bg-purple-100 text-purple-700'},
-  in_call:        { label: 'In Call',        cls: 'bg-orange-100 text-orange-700'},
-  completed:      { label: 'Completed',      cls: 'bg-green-100 text-green-700'  },
-  rejected:       { label: 'Rejected',       cls: 'bg-red-100 text-red-600'      },
-  failed:         { label: 'Failed',         cls: 'bg-red-100 text-red-600'      },
-  // call statuses
-  dialing:        { label: 'Dialing',        cls: 'bg-orange-100 text-orange-700'},
-  no_answer:      { label: 'No Answer',      cls: 'bg-gray-100 text-gray-600'    },
+  pending:        { label: 'Pending',     cls: 'bg-slate-100 text-slate-600',    dot: 'bg-slate-400'   },
+  analyzed:       { label: 'Analyzed',    cls: 'bg-blue-50 text-blue-700',       dot: 'bg-blue-500'    },
+  pending_review: { label: 'In Review',   cls: 'bg-amber-50 text-amber-700',     dot: 'bg-amber-500'   },
+  scheduled:      { label: 'Scheduled',   cls: 'bg-violet-50 text-violet-700',   dot: 'bg-violet-500'  },
+  in_call:        { label: 'In Call',     cls: 'bg-orange-50 text-orange-700',   dot: 'bg-orange-500 animate-pulse' },
+  completed:      { label: 'Completed',   cls: 'bg-green-50 text-green-700',     dot: 'bg-green-500'   },
+  rejected:       { label: 'Rejected',    cls: 'bg-red-50 text-red-600',         dot: 'bg-red-400'     },
+  failed:         { label: 'Failed',      cls: 'bg-slate-100 text-slate-500',    dot: 'bg-slate-400'   },
+  dialing:        { label: 'Dialing',     cls: 'bg-orange-50 text-orange-700',   dot: 'bg-orange-500 animate-pulse' },
+  no_answer:      { label: 'No Answer',   cls: 'bg-slate-100 text-slate-500',    dot: 'bg-slate-400'   },
 }
 
 export default function StatusBadge({ status }) {
-  const { label, cls } = config[status] ?? { label: status, cls: 'bg-gray-100 text-gray-600' }
+  const { label, cls, dot } = config[status] ?? { label: status, cls: 'bg-slate-100 text-slate-600', dot: 'bg-slate-400' }
   return (
-    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${cls}`}>
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${cls}`}>
+      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dot}`} />
       {label}
     </span>
   )

@@ -15,7 +15,11 @@ def synthesize(text: str) -> str:
     """
     Generate TTS audio via ElevenLabs and return the /audio/<file> URL path.
     Caches by MD5 of text so identical phrases are never regenerated.
+    Returns "" if ElevenLabs is unconfigured — caller falls back to Twilio <Say>.
     """
+    if not settings.elevenlabs_api_key or not settings.elevenlabs_voice_id:
+        return ""  # not configured — use Twilio <Say> fallback
+
     cache_file = _cache_path(text)
     if cache_file.exists():
         return f"/audio/{cache_file.name}"

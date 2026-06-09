@@ -12,9 +12,20 @@ export default function Schedule() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
 
+  const fetchSchedule = () => {
+    getSchedule(date).then(setData).finally(() => setLoading(false))
+  }
+
   useEffect(() => {
     setLoading(true)
-    getSchedule(date).then(setData).finally(() => setLoading(false))
+    fetchSchedule()
+  }, [date])
+
+  // Auto-refresh every 15s when viewing today so status updates appear live
+  useEffect(() => {
+    if (date !== today()) return
+    const interval = setInterval(fetchSchedule, 15000)
+    return () => clearInterval(interval)
   }, [date])
 
   const isToday = date === today()
@@ -44,6 +55,10 @@ export default function Schedule() {
           <button onClick={() => setDate(today())}
             className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">
             Today
+          </button>
+          <button onClick={fetchSchedule}
+            className="px-3 py-2 border border-gray-200 rounded-lg text-sm hover:bg-gray-50 text-gray-500" title="Refresh">
+            ↻
           </button>
         </div>
       </div>
