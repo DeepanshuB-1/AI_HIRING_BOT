@@ -4,7 +4,7 @@ import { getCandidates, deleteCandidate, getJobs } from '../api/client'
 import StatusBadge from '../components/StatusBadge'
 import UploadModal from '../components/UploadModal'
 
-const STATUSES = ['all', 'pending', 'analyzed', 'pending_review', 'scheduled', 'in_call', 'completed', 'rejected']
+const STATUSES = ['all', 'pending', 'analyzed', 'pending_review', 'scheduled', 'in_call', 'completed', 'rejected', 'failed']
 
 export default function Candidates() {
   const [searchParams, setSearchParams] = useSearchParams()

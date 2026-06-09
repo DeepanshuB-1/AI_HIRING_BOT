@@ -193,6 +193,25 @@ async def apply_to_job(
     current: CandidateUser = Depends(get_current_candidate),
 ):
     """Authenticated candidate submits their resume for a job."""
+    # Validate file type
+    suffix = Path(resume.filename or "").suffix.lower()
+    if suffix not in (".pdf", ".docx", ".txt"):
+        raise HTTPException(status_code=400, detail="Resume must be a PDF, DOCX, or TXT file")
+
+    # Validate file size (10 MB cap) — read first chunk to get size without loading all into memory
+    contents = await resume.read()
+    if len(contents) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Resume file too large (max 10 MB)")
+    if len(contents) == 0:
+        raise HTTPException(status_code=400, detail="Resume file is empty")
+    await resume.seek(0)
+
+    # Sanitise phone: strip spaces/dashes, must be at least 7 digits
+    phone_clean = "".join(c for c in phone.strip() if c.isdigit() or c == "+")
+    digits_only = "".join(c for c in phone_clean if c.isdigit())
+    if len(digits_only) < 7:
+        raise HTTPException(status_code=422, detail="Please enter a valid phone number")
+
     job = await db.get(Job, job_id)
     if not job or not job.is_active:
         raise HTTPException(status_code=404, detail="Job not found or no longer accepting applications")
@@ -210,20 +229,20 @@ async def apply_to_job(
     # Save resume file
     upload_dir = Path(settings.upload_dir) / str(job_id)
     upload_dir.mkdir(parents=True, exist_ok=True)
-    safe_name = f"{uuid.uuid4()}_{resume.filename}"
+    safe_name = f"{uuid.uuid4()}{suffix}"
     file_path = upload_dir / safe_name
     with open(file_path, "wb") as f:
         shutil.copyfileobj(resume.file, f)
 
     # Update candidate user's phone if provided
-    if phone and not current.phone:
-        current.phone = phone
+    if phone_clean and not current.phone:
+        current.phone = phone_clean
 
     # Create Candidate pipeline record
     candidate = Candidate(
         name=current.name,
         email=current.email,
-        phone=phone or current.phone or "",
+        phone=phone_clean or current.phone or "",
         resume_url=str(file_path),
         jd_id=job_id,
         hr_user_id=job.hr_user_id,

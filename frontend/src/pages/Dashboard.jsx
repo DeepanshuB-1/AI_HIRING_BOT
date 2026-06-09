@@ -10,6 +10,7 @@ const PIPELINE = [
   { s: 'scheduled',      label: 'Scheduled',    color: 'bg-violet-100 text-violet-700',  bar: 'bg-violet-500' },
   { s: 'completed',      label: 'Completed',    color: 'bg-green-100 text-green-700',    bar: 'bg-green-500' },
   { s: 'rejected',       label: 'Rejected',     color: 'bg-red-100 text-red-600',        bar: 'bg-red-400' },
+  { s: 'failed',         label: 'Failed',       color: 'bg-slate-100 text-slate-500',    bar: 'bg-slate-300' },
 ]
 
 function StatCard({ label, value, sub, icon, accent }) {

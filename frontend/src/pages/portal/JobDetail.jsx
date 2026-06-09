@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import axios from 'axios'
 import { portalGetJob, portalApply } from '../../api/client'
 import { useCandidateAuth } from '../../contexts/CandidateAuthContext'
 
@@ -51,9 +50,20 @@ export default function JobDetail() {
   const handleApply = async (e) => {
     e.preventDefault()
     if (!user) { navigate('/portal/login', { state: { from: `/portal/jobs/${id}` } }); return }
+
     const file = fileRef.current?.files[0]
     if (!file) { setError('Please select your resume file'); return }
-    if (!phone.trim()) { setError('Please enter your phone number'); return }
+
+    const ext = file.name.split('.').pop().toLowerCase()
+    if (!['pdf', 'docx', 'txt'].includes(ext)) {
+      setError('Resume must be a PDF, DOCX, or TXT file'); return
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setError('Resume file is too large (max 10 MB)'); return
+    }
+
+    const digits = phone.replace(/\D/g, '')
+    if (digits.length < 7) { setError('Please enter a valid phone number'); return }
 
     setApplying(true)
     setError('')
@@ -61,9 +71,7 @@ export default function JobDetail() {
       const fd = new FormData()
       fd.append('resume', file)
       fd.append('phone', phone.trim())
-      await axios.post(`/api/portal/apply/${id}`, fd, {
-        headers: { ...authHeader, 'Content-Type': 'multipart/form-data' },
-      })
+      await portalApply(id, fd)
       setApplied(true)
     } catch (err) {
       setError(err.response?.data?.detail || 'Failed to submit application')
@@ -268,7 +276,7 @@ export default function JobDetail() {
                         {fileName || 'Click to upload resume'}
                       </span>
                       <input
-                        ref={fileRef} type="file" required accept=".pdf,.doc,.docx" className="hidden"
+                        ref={fileRef} type="file" required accept=".pdf,.docx,.txt" className="hidden"
                         onChange={e => setFileName(e.target.files[0]?.name || '')} />
                     </label>
                   </div>
