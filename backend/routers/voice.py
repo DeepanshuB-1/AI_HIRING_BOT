@@ -296,7 +296,7 @@ async def initiate_screening(candidate_id: uuid.UUID, db: AsyncSession = Depends
         raise HTTPException(status_code=404, detail="Candidate not found")
     if not candidate.consent_given:
         raise HTTPException(status_code=403, detail="Candidate has not given consent yet")
-    if candidate.status not in (CandidateStatus.analyzed, CandidateStatus.pending_review):
+    if candidate.status not in (CandidateStatus.analyzed, CandidateStatus.pending_review, CandidateStatus.scheduled):
         raise HTTPException(
             status_code=400,
             detail=f"Candidate not ready for call. Current status: {candidate.status}",
@@ -358,6 +358,8 @@ async def voice_start(
     if call:
         call.call_started_at = datetime.utcnow()
         call.status = CallStatus.in_progress
+    else:
+        logger.error(f"[voice_start] No ScreeningCall found for CallSid={CallSid} — report will be skipped")
 
     candidate.status = CandidateStatus.in_call
 
@@ -464,11 +466,8 @@ async def voice_status(
             send_sms_task.delay(candidate.phone, reschedule_sms(candidate.name, reschedule_url))
         else:
             candidate.status = CandidateStatus.rejected
-            send_sms_task.delay(
-                candidate.phone,
-                f"Hi {candidate.name}, we were unable to reach you for your screening interview. "
-                "Please contact HR if you're still interested.",
-            )
+            from backend.notifications.templates import unreachable_sms
+            send_sms_task.delay(candidate.phone, unreachable_sms(candidate.name))
 
     await db.commit()
     return {"ok": True}

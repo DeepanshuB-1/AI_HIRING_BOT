@@ -9,6 +9,13 @@ def consent_sms(name: str, consent_url: str) -> str:
     )
 
 
+def unreachable_sms(name: str) -> str:
+    return (
+        f"Hi {name}, we were unable to reach you for your screening interview after multiple attempts. "
+        f"Please contact HR if you are still interested in the position."
+    )
+
+
 def reschedule_sms(name: str, consent_url: str) -> str:
     return (
         f"Hi {name}, we couldn't reach you at your scheduled time. "

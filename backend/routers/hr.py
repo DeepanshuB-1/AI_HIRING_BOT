@@ -3,7 +3,7 @@ import shutil
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text, or_
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from backend.database import get_db
@@ -52,7 +52,7 @@ async def list_jobs(
 ):
     result = await db.execute(
         select(Job)
-        .where(or_(Job.hr_user_id == current_user.id, Job.hr_user_id.is_(None)))
+        .where(Job.hr_user_id == current_user.id)
         .order_by(Job.created_at.desc())
     )
     return result.scalars().all()
@@ -65,7 +65,7 @@ async def get_job(
     current_user: User = Depends(get_current_user),
 ):
     job = await db.get(Job, job_id)
-    if not job:
+    if not job or job.hr_user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
 
@@ -187,7 +187,7 @@ async def list_candidates(
         )
     query = (
         select(Candidate)
-        .where(or_(Candidate.hr_user_id == current_user.id, Candidate.hr_user_id.is_(None)))
+        .where(Candidate.hr_user_id == current_user.id)
         .order_by(Candidate.created_at.desc())
         .offset(skip).limit(limit)
     )
@@ -417,7 +417,7 @@ async def get_candidate(
     current_user: User = Depends(get_current_user),
 ):
     candidate = await db.get(Candidate, candidate_id)
-    if not candidate:
+    if not candidate or candidate.hr_user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Candidate not found")
     return candidate
 
@@ -430,7 +430,7 @@ async def update_candidate_phone(
     current_user: User = Depends(get_current_user),
 ):
     candidate = await db.get(Candidate, candidate_id)
-    if not candidate:
+    if not candidate or candidate.hr_user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Candidate not found")
     candidate.phone = phone
     await db.commit()
@@ -444,11 +444,12 @@ async def delete_candidate(
     current_user: User = Depends(get_current_user),
 ):
     candidate = await db.get(Candidate, candidate_id)
-    if not candidate:
+    if not candidate or candidate.hr_user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Candidate not found")
     if candidate.resume_url:
         Path(candidate.resume_url).unlink(missing_ok=True)
     await db.delete(candidate)
+    await db.commit()
 
 
 @router.get("/candidates/{candidate_id}/report")
@@ -458,6 +459,10 @@ async def get_candidate_report(
     current_user: User = Depends(get_current_user),
 ):
     """Get the post-call score report for a candidate."""
+    candidate = await db.get(Candidate, candidate_id)
+    if not candidate or candidate.hr_user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+
     result = await db.execute(
         select(ScreeningCall).where(ScreeningCall.candidate_id == candidate_id)
         .order_by(ScreeningCall.created_at.desc())
@@ -505,7 +510,7 @@ async def find_similar_candidates(
 ):
     """Find top-N candidates with the most similar resume to the given candidate."""
     candidate = await db.get(Candidate, candidate_id)
-    if not candidate:
+    if not candidate or candidate.hr_user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Candidate not found")
     if candidate.resume_embedding is None:
         raise HTTPException(status_code=422, detail="Candidate has no resume embedding yet")

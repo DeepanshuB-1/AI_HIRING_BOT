@@ -72,6 +72,9 @@ def run_profile_extraction(self, candidate_id: str, resume_path: str):
                     candidate.resume_text = text
                     candidate.profile_json = profile
                     candidate.profile_embedding = profile_embedding
+                    # Use phone from resume if candidate has none
+                    if not candidate.phone and profile.get("phone"):
+                        candidate.phone = profile["phone"]
                     await db.commit()
 
         _run(_save())
@@ -229,6 +232,9 @@ def run_report_gen(self, call_sid: str):
         from .services.report_gen import generate_report_with_embedding
 
         state = get_state(call_sid)
+        if not state or not state.get("call_id"):
+            logger.error(f"[run_report_gen] No state/call_id for CallSid={call_sid} — skipping report")
+            return {"status": "skipped", "reason": "no call_id in state"}
 
         async def _save():
             from .database import AsyncSessionLocal
@@ -301,13 +307,23 @@ def run_report_gen(self, call_sid: str):
         raise self.retry(exc=exc, countdown=15)
 
 
-@celery.task(name="backend.tasks.send_email_task")
-def send_email_task(to_email: str, subject: str, html_content: str):
+@celery.task(name="backend.tasks.send_email_task", bind=True, max_retries=3)
+def send_email_task(self, to_email: str, subject: str, html_content: str):
     from .notifications.email import send_email
-    return send_email(to_email, subject, html_content)
+    success = send_email(to_email, subject, html_content)
+    if not success:
+        try:
+            raise self.retry(countdown=30)
+        except Exception:
+            pass  # credentials not configured — don't retry indefinitely
 
 
-@celery.task(name="backend.tasks.send_sms_task")
-def send_sms_task(to_phone: str, message: str):
+@celery.task(name="backend.tasks.send_sms_task", bind=True, max_retries=3)
+def send_sms_task(self, to_phone: str, message: str):
     from .notifications.sms import send_sms
-    return send_sms(to_phone, message)
+    success = send_sms(to_phone, message)
+    if not success:
+        try:
+            raise self.retry(countdown=30)
+        except Exception:
+            pass  # credentials not configured — don't retry indefinitely

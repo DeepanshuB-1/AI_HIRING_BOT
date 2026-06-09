@@ -17,6 +17,12 @@ def _normalize_phone(phone: str) -> str:
 
 
 def send_sms(to_phone: str, message: str) -> bool:
+    if not to_phone or not to_phone.strip():
+        logger.warning("send_sms called with empty phone number — skipping")
+        return False
+    if not settings.twilio_account_sid or not settings.twilio_auth_token or not settings.twilio_phone_number:
+        logger.warning("Twilio credentials not configured — SMS not sent")
+        return False
     try:
         from twilio.rest import Client
         client = Client(settings.twilio_account_sid, settings.twilio_auth_token)
