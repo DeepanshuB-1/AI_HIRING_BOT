@@ -4,6 +4,20 @@ from uuid import UUID
 from datetime import datetime
 
 
+class JobUpdate(BaseModel):
+    title: Optional[str] = None
+    company: Optional[str] = None
+    location: Optional[str] = None
+    employment_type: Optional[str] = None
+    department: Optional[str] = None
+    jd_text: Optional[str] = None
+    required_skills: Optional[List[str]] = None
+    min_experience: Optional[int] = None
+    auto_reject_threshold: Optional[int] = None
+    question_count: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
 class JobCreate(BaseModel):
     title: str
     company: Optional[str] = None

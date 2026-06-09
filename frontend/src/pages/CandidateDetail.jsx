@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { getCandidate, getCandidateReport, initiateCall, submitDecision } from '../api/client'
+import { getCandidate, getCandidateReport, initiateCall, submitDecision, retriggerPipeline } from '../api/client'
 import StatusBadge from '../components/StatusBadge'
 import ScoreBar from '../components/ScoreBar'
 
@@ -20,7 +20,8 @@ export default function CandidateDetail() {
   const [error, setError] = useState('')
   const [decisionLoading, setDecisionLoading] = useState(false)
   const [decisionNotes, setDecisionNotes] = useState('')
-  const [decisionSent, setDecisionSent] = useState(null) // the decision that was sent
+  const [decisionSent, setDecisionSent] = useState(null)
+  const [retriggering, setRetriggering] = useState(false)
 
   useEffect(() => {
     getCandidate(id).then(setCandidate)
@@ -49,6 +50,19 @@ export default function CandidateDetail() {
     } finally {
       setDecisionLoading(false)
     }
+  }
+
+  const handleRetrigger = async () => {
+    if (!confirm('Re-run the AI pipeline for this candidate? This will re-score and regenerate questions.')) return
+    setRetriggering(true)
+    try {
+      await retriggerPipeline(id)
+      const fresh = await getCandidate(id)
+      setCandidate(fresh)
+      setError('')
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Re-trigger failed')
+    } finally { setRetriggering(false) }
   }
 
   const handleCall = async () => {
@@ -120,6 +134,12 @@ export default function CandidateDetail() {
             <p className="text-xs text-yellow-600 bg-yellow-50 px-3 py-2 rounded-lg">
               Waiting for candidate consent to schedule call
             </p>
+          )}
+          {['failed', 'pending'].includes(candidate.status) && (
+            <button onClick={handleRetrigger} disabled={retriggering}
+              className="w-full py-2 bg-amber-500 text-white rounded-lg text-sm font-medium hover:bg-amber-600 disabled:opacity-50">
+              {retriggering ? 'Re-triggering...' : '↺ Re-run AI Pipeline'}
+            </button>
           )}
         </div>
 

@@ -14,7 +14,7 @@ from backend.models.call import ScreeningCall, CallStatus
 from backend.models.report import ScoreReport
 from backend.models.user import User
 from backend.schemas.candidate import CandidateCreate, CandidateOut, CandidateDetail
-from backend.schemas.job import JobCreate, JobOut, JobDetail
+from backend.schemas.job import JobCreate, JobUpdate, JobOut, JobDetail
 from backend.schemas.search import CandidateSearchResult
 from backend.auth import get_current_user
 from backend.tasks import (
@@ -67,6 +67,23 @@ async def get_job(
     job = await db.get(Job, job_id)
     if not job or job.hr_user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+@router.patch("/jobs/{job_id}", response_model=JobDetail)
+async def update_job(
+    job_id: uuid.UUID,
+    payload: JobUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Edit job fields. Only provided fields are updated (PATCH semantics)."""
+    job = await db.get(Job, job_id)
+    if not job or job.hr_user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(job, field, value)
+    await db.flush()
     return job
 
 
@@ -435,6 +452,75 @@ async def get_candidate(
     return candidate
 
 
+@router.post("/candidates/bulk-reject", status_code=200)
+async def bulk_reject(
+    candidate_ids: list[uuid.UUID] = Body(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Reject multiple candidates at once and send rejection emails."""
+    from backend.tasks import send_email_task
+    from backend.notifications.templates import rejection_email_html
+
+    result = await db.execute(
+        select(Candidate, Job)
+        .outerjoin(Job, Candidate.jd_id == Job.id)
+        .where(
+            Candidate.id.in_(candidate_ids),
+            Candidate.hr_user_id == current_user.id,
+            Candidate.status != CandidateStatus.rejected,
+        )
+    )
+    rows = result.all()
+
+    rejected = 0
+    for candidate, job in rows:
+        candidate.status = CandidateStatus.rejected
+        role = job.title if job else "the applied role"
+        subject, html = rejection_email_html(candidate.name, role, current_user.company_name)
+        send_email_task.delay(candidate.email, subject, html)
+        rejected += 1
+
+    await db.commit()
+    return {"rejected": rejected}
+
+
+@router.post("/candidates/{candidate_id}/retrigger", status_code=202)
+async def retrigger_pipeline(
+    candidate_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Re-run the AI pipeline for a candidate in failed/pending status."""
+    candidate = await db.get(Candidate, candidate_id)
+    if not candidate or candidate.hr_user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    if candidate.status not in (CandidateStatus.failed, CandidateStatus.pending):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot re-trigger pipeline for a candidate with status '{candidate.status.value}'. Only failed or pending candidates can be re-triggered."
+        )
+    if not candidate.resume_url:
+        raise HTTPException(status_code=400, detail="No resume on file — cannot re-trigger pipeline")
+
+    job = await db.get(Job, candidate.jd_id) if candidate.jd_id else None
+    if not job:
+        raise HTTPException(status_code=400, detail="Job not found — cannot re-trigger pipeline")
+
+    candidate.status = CandidateStatus.pending
+    await db.commit()
+
+    chain = (
+        run_profile_extraction.si(str(candidate.id), candidate.resume_url)
+        | run_embedding_layer.si(str(candidate.id), candidate.resume_url, str(job.id), job.jd_text)
+        | run_jd_scoring.si(str(candidate.id), job.jd_text)
+        | run_question_gen.si(str(candidate.id), str(job.id), job.jd_text)
+    )
+    chain.delay()
+
+    return {"ok": True, "message": "Pipeline re-triggered", "candidate_id": str(candidate_id)}
+
+
 @router.patch("/candidates/{candidate_id}/phone", response_model=CandidateOut)
 async def update_candidate_phone(
     candidate_id: uuid.UUID,
@@ -628,3 +714,128 @@ async def find_similar_candidates(
         )
         for row in rows
     ]
+
+
+# ── Analytics ─────────────────────────────────────────────────────────────────
+
+@router.get("/candidates/export")
+async def export_candidates_csv(
+    job_id: uuid.UUID = Query(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Export all candidates for a job as a CSV download."""
+    import csv, io
+    from fastapi.responses import StreamingResponse
+
+    job = await db.get(Job, job_id)
+    if not job or job.hr_user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    result = await db.execute(
+        select(Candidate)
+        .where(Candidate.jd_id == job_id, Candidate.hr_user_id == current_user.id)
+        .order_by(Candidate.created_at.desc())
+    )
+    candidates = result.scalars().all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Name", "Email", "Phone", "Status", "Match Score", "Vector Score", "LLM Score", "Source", "Applied At", "Consent"])
+    for c in candidates:
+        writer.writerow([
+            c.name, c.email, c.phone,
+            c.status.value,
+            c.match_score or "",
+            round(c.vector_score, 1) if c.vector_score else "",
+            round(c.llm_score, 1) if c.llm_score else "",
+            c.source or "",
+            c.created_at.strftime("%Y-%m-%d %H:%M") if c.created_at else "",
+            "Yes" if c.consent_given else "No",
+        ])
+
+    safe_title = "".join(c for c in job.title if c.isalnum() or c in " -_").strip().replace(" ", "_")
+    filename = f"{safe_title}_candidates.csv"
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=\"{filename}\""},
+    )
+
+
+@router.get("/analytics")
+async def get_analytics(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Hiring pipeline analytics for the current HR user."""
+    from sqlalchemy import func as sqlfunc, case, Float
+    from sqlalchemy import cast
+
+    # Pipeline funnel counts
+    funnel_result = await db.execute(
+        select(Candidate.status, sqlfunc.count().label("cnt"))
+        .where(Candidate.hr_user_id == current_user.id)
+        .group_by(Candidate.status)
+    )
+    funnel = {row.status.value: row.cnt for row in funnel_result}
+
+    # Per-job stats
+    jobs_result = await db.execute(
+        select(Job.id, Job.title, Job.company, Job.is_active,
+               sqlfunc.count(Candidate.id).label("total"),
+               sqlfunc.avg(cast(Candidate.match_score, Float)).label("avg_score"),
+               sqlfunc.sum(
+                   case((Candidate.status.in_([CandidateStatus.completed, CandidateStatus.rejected]), 1), else_=0)
+               ).label("screened"),
+               sqlfunc.sum(
+                   case((Candidate.status == CandidateStatus.completed, 1), else_=0)
+               ).label("passed"),
+        )
+        .outerjoin(Candidate, (Candidate.jd_id == Job.id) & (Candidate.hr_user_id == current_user.id))
+        .where(Job.hr_user_id == current_user.id)
+        .group_by(Job.id, Job.title, Job.company, Job.is_active)
+        .order_by(sqlfunc.count(Candidate.id).desc())
+    )
+    jobs_stats = []
+    for row in jobs_result:
+        screened = int(row.screened or 0)
+        passed = int(row.passed or 0)
+        jobs_stats.append({
+            "job_id": str(row.id),
+            "title": row.title,
+            "company": row.company,
+            "is_active": row.is_active,
+            "total": int(row.total or 0),
+            "avg_score": round(float(row.avg_score), 1) if row.avg_score else None,
+            "screened": screened,
+            "pass_rate": round(passed / screened * 100) if screened > 0 else None,
+        })
+
+    # Score distribution buckets
+    score_dist_result = await db.execute(
+        select(Candidate.match_score)
+        .where(Candidate.hr_user_id == current_user.id, Candidate.match_score.isnot(None))
+    )
+    scores = [r.match_score for r in score_dist_result]
+    buckets = {"0-40": 0, "41-60": 0, "61-80": 0, "81-100": 0}
+    for s in scores:
+        if s <= 40: buckets["0-40"] += 1
+        elif s <= 60: buckets["41-60"] += 1
+        elif s <= 80: buckets["61-80"] += 1
+        else: buckets["81-100"] += 1
+
+    total = sum(funnel.values())
+    completed = funnel.get("completed", 0)
+    rejected = funnel.get("rejected", 0)
+    screened_total = completed + rejected
+
+    return {
+        "funnel": funnel,
+        "total": total,
+        "pass_rate": round(completed / screened_total * 100) if screened_total > 0 else 0,
+        "avg_score": round(sum(scores) / len(scores), 1) if scores else None,
+        "jobs": jobs_stats,
+        "score_distribution": buckets,
+    }

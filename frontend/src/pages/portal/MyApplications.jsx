@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { portalMyApplications } from '../../api/client'
+import { portalMyApplications, portalWithdraw } from '../../api/client'
 import { useCandidateAuth } from '../../contexts/CandidateAuthContext'
 
 const STEPS = ['pending', 'analyzed', 'pending_review', 'scheduled', 'in_call', 'completed']
@@ -58,6 +58,16 @@ export default function MyApplications() {
   }, [user, ready])
 
   const handleLogout = () => { logout(); navigate('/portal') }
+
+  const handleWithdraw = async (app) => {
+    if (!confirm(`Withdraw your application for "${app.job_title}"? This cannot be undone.`)) return
+    try {
+      await portalWithdraw(app.id)
+      setApps(prev => prev.filter(a => a.id !== app.id))
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Could not withdraw application')
+    }
+  }
 
   if (!ready) return null
 
@@ -179,6 +189,16 @@ export default function MyApplications() {
                   )}
 
                   <ProgressBar status={app.status} />
+
+                  {['pending', 'analyzed', 'pending_review'].includes(app.status) && (
+                    <div className="mt-3 flex justify-end">
+                      <button
+                        onClick={() => handleWithdraw(app)}
+                        className="text-xs text-red-500 hover:text-red-700 hover:bg-red-50 px-3 py-1.5 rounded-lg transition-colors font-medium border border-red-100 hover:border-red-200">
+                        Withdraw application
+                      </button>
+                    </div>
+                  )}
                 </div>
               )
             })}

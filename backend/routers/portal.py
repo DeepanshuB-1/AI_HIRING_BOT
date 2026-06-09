@@ -1,4 +1,5 @@
 import uuid
+import secrets
 import shutil
 from pathlib import Path
 from datetime import datetime
@@ -16,6 +17,7 @@ from backend.models.candidate_user import CandidateUser
 from backend.models.candidate import Candidate, CandidateStatus
 from backend.models.job import Job
 from backend.auth import hash_password, verify_password, create_access_token
+from backend.redis_client import get_redis
 
 router = APIRouter(prefix="/api/portal", tags=["Candidate Portal"])
 
@@ -161,6 +163,70 @@ async def candidate_me(current: CandidateUser = Depends(get_current_candidate)):
     return current
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+_RESET_TTL = 900  # 15 minutes
+
+
+@router.post("/auth/forgot-password", status_code=200)
+async def forgot_password(payload: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+    """Send a password reset email. Always returns 200 to avoid email enumeration."""
+    result = await db.execute(
+        select(CandidateUser).where(CandidateUser.email == payload.email.lower().strip())
+    )
+    user = result.scalars().first()
+    if user:
+        token = secrets.token_urlsafe(32)
+        rdb = get_redis()
+        rdb.setex(f"pwd_reset:{token}", _RESET_TTL, str(user.id))
+
+        reset_url = f"{settings.frontend_url}/portal/reset-password?token={token}"
+        from backend.tasks import send_email_task
+        from backend.notifications.templates import _first
+        subject = "Reset your AI Hiring Bot password"
+        html = f"""
+        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px">
+          <h2 style="color:#1e293b">Password Reset</h2>
+          <p>Hi {_first(user.name)},</p>
+          <p>Click the button below to reset your password. This link expires in 15 minutes.</p>
+          <a href="{reset_url}" style="display:inline-block;margin:20px 0;padding:12px 28px;
+            background:#7c3aed;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">
+            Reset Password
+          </a>
+          <p style="color:#94a3b8;font-size:13px">If you didn't request this, you can safely ignore this email.</p>
+        </div>"""
+        send_email_task.delay(user.email, subject, html)
+    return {"message": "If an account with that email exists, a reset link has been sent."}
+
+
+@router.post("/auth/reset-password", status_code=200)
+async def reset_password(payload: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+    """Validate token and set new password."""
+    if len(payload.new_password) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+
+    rdb = get_redis()
+    user_id = rdb.get(f"pwd_reset:{payload.token}")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Reset link is invalid or has expired")
+
+    user = await db.get(CandidateUser, uuid.UUID(user_id))
+    if not user:
+        raise HTTPException(status_code=400, detail="User not found")
+
+    user.password_hash = hash_password(payload.new_password)
+    await db.commit()
+    rdb.delete(f"pwd_reset:{payload.token}")
+    return {"message": "Password updated successfully. You can now log in."}
+
+
 # ── Public Job Board ──────────────────────────────────────────────────────────
 
 @router.get("/jobs", response_model=list[PublicJobOut])
@@ -274,6 +340,28 @@ async def apply_to_job(
         "job_title": job.title,
         "company": job.company or settings.company_name,
     }
+
+
+# ── Withdraw Application ──────────────────────────────────────────────────────
+
+@router.delete("/apply/{candidate_id}", status_code=200)
+async def withdraw_application(
+    candidate_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current: CandidateUser = Depends(get_current_candidate),
+):
+    """Candidate withdraws their own application (only if still pending/analyzed)."""
+    candidate = await db.get(Candidate, candidate_id)
+    if not candidate or candidate.email.lower() != current.email.lower():
+        raise HTTPException(status_code=404, detail="Application not found")
+    if candidate.status not in (CandidateStatus.pending, CandidateStatus.analyzed, CandidateStatus.pending_review):
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot withdraw — interview has already been scheduled or completed"
+        )
+    await db.delete(candidate)
+    await db.commit()
+    return {"message": "Application withdrawn successfully"}
 
 
 # ── My Applications ───────────────────────────────────────────────────────────

@@ -67,6 +67,31 @@ Instructions:
     return response, False
 
 
+def generate_followup_probe(call_state: dict, q_index: int) -> str:
+    """Generate a single probing follow-up when the candidate's answer is too short/vague."""
+    transcript = call_state.get("transcript", [])
+    questions = call_state.get("questions", [])
+
+    q = questions[q_index] if q_index < len(questions) else {}
+    q_text = q.get("question", q) if isinstance(q, dict) else str(q)
+
+    last_answer = next(
+        (t["text"] for t in reversed(transcript) if t["role"] == "candidate"), ""
+    )
+
+    prompt = f"""You are Alex, a warm AI phone interviewer. The candidate just gave a brief answer and you want to gently draw out more detail before moving on.
+
+Question asked: "{q_text}"
+Candidate's answer so far: "{last_answer}"
+
+Instructions:
+- Briefly acknowledge their answer (e.g. "Thanks for that." / "Got it.")
+- Ask ONE specific follow-up probe — for example: "Could you give me a quick example?", "Can you walk me through that a bit more?", "What was the outcome there?"
+- Maximum 2 sentences, warm and encouraging tone
+- Return ONLY the spoken text, no labels"""
+    return ollama_chat(prompt, model=INTERVIEW_MODEL, expect_json=False, temperature=0.5)
+
+
 def generate_closing(call_state: dict) -> str:
     """Generate the final thank-you statement when all questions are done."""
     candidate_name = call_state.get("candidate_name", "candidate")

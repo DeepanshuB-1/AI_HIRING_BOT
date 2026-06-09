@@ -8,6 +8,7 @@ import Candidates from './pages/Candidates'
 import CandidateDetail from './pages/CandidateDetail'
 import Schedule from './pages/Schedule'
 import Search from './pages/Search'
+import Analytics from './pages/Analytics'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import JobBoard from './pages/portal/JobBoard'
@@ -15,6 +16,8 @@ import JobDetail from './pages/portal/JobDetail'
 import CandidateLogin from './pages/portal/CandidateLogin'
 import CandidateRegister from './pages/portal/CandidateRegister'
 import MyApplications from './pages/portal/MyApplications'
+import ForgotPassword from './pages/portal/ForgotPassword'
+import ResetPassword from './pages/portal/ResetPassword'
 
 function ProtectedLayout() {
   const { user, ready } = useAuth()
@@ -31,6 +34,7 @@ function ProtectedLayout() {
           <Route path="/candidates/:id" element={<CandidateDetail />} />
           <Route path="/schedule"       element={<Schedule />} />
           <Route path="/search"         element={<Search />} />
+          <Route path="/analytics"      element={<Analytics />} />
         </Routes>
       </main>
     </div>
@@ -54,7 +58,9 @@ export default function App() {
           <Route path="/portal/jobs/:id"       element={<JobDetail />} />
           <Route path="/portal/login"          element={<CandidateLogin />} />
           <Route path="/portal/register"       element={<CandidateRegister />} />
-          <Route path="/portal/applications"   element={<MyApplications />} />
+          <Route path="/portal/applications"    element={<MyApplications />} />
+          <Route path="/portal/forgot-password" element={<ForgotPassword />} />
+          <Route path="/portal/reset-password"  element={<ResetPassword />} />
 
           {/* ── HR Dashboard ── */}
           <Route path="/*" element={

@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     # App
     secret_key: str = "change-me-in-production"
     webhook_base_url: str = "https://your-ngrok-url.ngrok.io"
+    frontend_url: str = "http://localhost:5173"
     upload_dir: str = "./uploads"
     audio_cache_dir: str = "./audio_cache"
     auto_reject_threshold: int = 40

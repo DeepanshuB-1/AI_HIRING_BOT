@@ -18,7 +18,7 @@ from backend.models.job import Job
 from backend.voice.call_state import init_state, get_state, update_state, append_transcript
 from backend.voice.tts import synthesize
 from backend.voice.twilio_client import initiate_call
-from backend.services.interview_engine import generate_opening, generate_next_response
+from backend.services.interview_engine import generate_opening, generate_next_response, generate_followup_probe
 from backend.tasks import run_report_gen, send_sms_task
 
 logger = logging.getLogger(__name__)
@@ -542,10 +542,19 @@ async def voice_respond(
             append_transcript(CallSid, "ai", msg)
             return _twiml(_play_or_say(msg, speech_timeout="4"))
 
-    # ── Normal answer — record, advance, generate next response ─────────────
+    # ── Normal answer — record, optionally probe, advance ───────────────────
     if intent == "answer":
         update_state(CallSid, {"unclear_count": 0})
         append_transcript(CallSid, "candidate", speech)
+
+        # Follow-up probe: if answer is too short, probe once before moving on
+        probed = state.get("probed_questions", [])
+        if len(speech.split()) < 15 and q_index not in probed:
+            probe_text = generate_followup_probe(state, q_index)
+            append_transcript(CallSid, "ai", probe_text)
+            update_state(CallSid, {"probed_questions": probed + [q_index]})
+            return _twiml(_play_or_say(probe_text, speech_timeout="4", start_timeout=25))
+
         update_state(CallSid, {"question_index": q_index + 1})
         state = get_state(CallSid)
         response_text, is_closing = generate_next_response(state)

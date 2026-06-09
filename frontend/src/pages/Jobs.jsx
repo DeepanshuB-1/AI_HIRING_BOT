@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getJobs, createJob } from '../api/client'
+import { getJobs, createJob, updateJob, toggleJobActive } from '../api/client'
 import { Link } from 'react-router-dom'
 
 const TYPE_LABELS = { full_time: 'Full Time', part_time: 'Part Time', contract: 'Contract', internship: 'Internship' }
@@ -8,8 +8,12 @@ const TYPE_COLORS = {
   contract: 'bg-amber-50 text-amber-700', internship: 'bg-green-50 text-green-700',
 }
 
-function CreateJobModal({ onClose, onSuccess }) {
-  const [form, setForm] = useState({ title: '', company: '', location: '', jd_text: '', employment_type: 'full_time', min_experience: 0 })
+function JobFormModal({ onClose, onSuccess, existing = null }) {
+  const isEdit = !!existing
+  const [form, setForm] = useState(existing
+    ? { title: existing.title, company: existing.company || '', location: existing.location || '', jd_text: existing.jd_text || '', employment_type: existing.employment_type || 'full_time', min_experience: existing.min_experience || 0 }
+    : { title: '', company: '', location: '', jd_text: '', employment_type: 'full_time', min_experience: 0 }
+  )
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
@@ -18,10 +22,10 @@ function CreateJobModal({ onClose, onSuccess }) {
     e.preventDefault()
     setLoading(true); setError('')
     try {
-      const job = await createJob(form)
+      const job = isEdit ? await updateJob(existing.id, form) : await createJob(form)
       onSuccess(job)
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to create job')
+      setError(err.response?.data?.detail || (isEdit ? 'Failed to update job' : 'Failed to create job'))
     } finally {
       setLoading(false)
     }
@@ -37,7 +41,7 @@ function CreateJobModal({ onClose, onSuccess }) {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
               </svg>
             </div>
-            <h2 className="text-base font-bold text-slate-900">Create New Job</h2>
+            <h2 className="text-base font-bold text-slate-900">{isEdit ? 'Edit Job' : 'Create New Job'}</h2>
           </div>
           <button onClick={onClose} className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-500 transition-colors">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -108,9 +112,9 @@ function CreateJobModal({ onClose, onSuccess }) {
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
-                  Creating...
+                  {isEdit ? 'Saving...' : 'Creating...'}
                 </>
-              ) : 'Create Job'}
+              ) : (isEdit ? 'Save Changes' : 'Create Job')}
             </button>
           </div>
         </form>
@@ -123,10 +127,21 @@ export default function Jobs() {
   const [jobs, setJobs] = useState([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
+  const [editingJob, setEditingJob] = useState(null)
 
   useEffect(() => {
     getJobs().then(setJobs).finally(() => setLoading(false))
   }, [])
+
+  const handleToggleActive = async (job) => {
+    const next = !job.is_active
+    setJobs(js => js.map(j => j.id === job.id ? { ...j, is_active: next } : j))
+    try {
+      await toggleJobActive(job.id, next)
+    } catch {
+      setJobs(js => js.map(j => j.id === job.id ? { ...j, is_active: job.is_active } : j))
+    }
+  }
 
   return (
     <div className="p-8 space-y-6 max-w-5xl">
@@ -168,7 +183,7 @@ export default function Jobs() {
       ) : (
         <div className="space-y-3">
           {jobs.map(job => (
-            <div key={job.id} className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 hover:border-indigo-200 hover:shadow-md transition-all group">
+            <div key={job.id} className={`bg-white rounded-2xl p-6 shadow-sm border transition-all group ${job.is_active ? 'border-slate-100 hover:border-indigo-200 hover:shadow-md' : 'border-slate-100 opacity-60'}`}>
               <div className="flex items-start justify-between gap-4 flex-wrap">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-3 flex-wrap mb-1">
@@ -207,6 +222,24 @@ export default function Jobs() {
                   <p className="text-sm text-slate-400 mt-2 line-clamp-2 leading-relaxed">{job.jd_text?.slice(0, 200)}...</p>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
+                  <button
+                    onClick={() => handleToggleActive(job)}
+                    title={job.is_active ? 'Close job (stop accepting applications)' : 'Reopen job'}
+                    className={`text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${
+                      job.is_active
+                        ? 'border-green-200 text-green-700 bg-green-50 hover:bg-green-100'
+                        : 'border-slate-200 text-slate-500 bg-slate-50 hover:bg-slate-100'
+                    }`}>
+                    {job.is_active ? '● Active' : '○ Closed'}
+                  </button>
+                  <button
+                    onClick={() => setEditingJob(job)}
+                    className="flex items-center gap-1.5 text-sm text-slate-600 hover:text-indigo-700 font-medium bg-slate-50 hover:bg-indigo-50 px-3 py-1.5 rounded-lg border border-slate-200 hover:border-indigo-200 transition-colors">
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
+                    Edit
+                  </button>
                   <Link to={`/candidates?job=${job.id}`}
                     className="flex items-center gap-1.5 text-sm text-indigo-600 hover:text-indigo-800 font-semibold bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-lg transition-colors">
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -226,9 +259,19 @@ export default function Jobs() {
       )}
 
       {showCreate && (
-        <CreateJobModal
+        <JobFormModal
           onClose={() => setShowCreate(false)}
           onSuccess={job => { setJobs(j => [job, ...j]); setShowCreate(false) }}
+        />
+      )}
+      {editingJob && (
+        <JobFormModal
+          existing={editingJob}
+          onClose={() => setEditingJob(null)}
+          onSuccess={updated => {
+            setJobs(js => js.map(j => j.id === updated.id ? { ...j, ...updated } : j))
+            setEditingJob(null)
+          }}
         />
       )}
     </div>

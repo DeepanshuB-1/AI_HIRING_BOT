@@ -108,6 +108,7 @@ export default function CandidateLogin() {
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <label className="block text-sm font-medium text-slate-700">Password</label>
+                    <Link to="/portal/forgot-password" className="text-xs text-violet-600 hover:text-violet-800">Forgot password?</Link>
                   </div>
                   <input type="password" required value={form.password}
                     onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
