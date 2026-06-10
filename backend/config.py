@@ -4,9 +4,16 @@ from functools import lru_cache
 
 class Settings(BaseSettings):
     # Ollama
+    # Analysis (Layers 2-4, 6 — structured JSON, scoring, reports):
+    #   Good:    llama3.1:8b   (4.7GB)
+    #   Better:  qwen2.5:7b    (4.7GB) — much better JSON consistency
+    #   Best:    qwen2.5:14b   (9.0GB) — requires 10GB+ VRAM
+    # Interview (Layer 5 — live voice call, speed matters most):
+    #   Good:    mistral:7b    (4.1GB)
+    #   Better:  llama3.2:3b   (2.0GB) — faster, still good conversation
     ollama_base_url: str = "http://localhost:11434"
-    ollama_analysis_model: str = "llama3.1:8b"
-    ollama_interview_model: str = "mistral:7b"
+    ollama_analysis_model: str = "qwen2.5:7b"
+    ollama_interview_model: str = "llama3.2:3b"
     ollama_embed_model: str = "nomic-embed-text"
     ollama_embed_dims: int = 768
 

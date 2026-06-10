@@ -1,0 +1,199 @@
+================================================================================
+  AI HIRING BOT — COMPLETE STARTUP GUIDE
+  Project: d:\Internship\AI_HIRING_BOT
+================================================================================
+
+You need 6 terminal windows open. Start them IN ORDER.
+
+--------------------------------------------------------------------------------
+PREREQUISITES (one-time checks)
+--------------------------------------------------------------------------------
+
+1. PostgreSQL is running on port 5433
+   - Check: open pgAdmin or run:  pg_isready -p 5433
+   - Database name: hiringbot
+   - The pgvector extension is auto-created by the app on first run
+
+2. Redis is running on port 6379
+   - Check: redis-cli ping   (should print PONG)
+   - Start if not running:  redis-server   (or via Windows Services)
+
+3. Ollama is running with the required models pulled
+   - Check: http://localhost:11434
+   - Pull models (only needed once):
+       ollama pull qwen2.5:7b          ← analysis/scoring/reports (better JSON accuracy)
+       ollama pull llama3.2:3b         ← voice interview (faster responses)
+       ollama pull nomic-embed-text    ← embeddings (required)
+
+   Optional upgrades (need 10GB+ VRAM):
+       ollama pull qwen2.5:14b         ← better analysis (set OLLAMA_ANALYSIS_MODEL=qwen2.5:14b in .env)
+
+   Legacy (if you pulled these before, they still work):
+       ollama pull llama3.1:8b
+       ollama pull mistral:7b
+
+   - Start Ollama app or run:  ollama serve
+
+4. .env file exists at project root with real keys
+   - Do NOT commit this file — it is gitignored
+   - Key variables:
+       DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5433/hiringbot
+       REDIS_URL=redis://localhost:6379
+       SECRET_KEY=<your secret>
+       SENDGRID_API_KEY=<your key>
+       TWILIO_ACCOUNT_SID=<your sid>
+       TWILIO_AUTH_TOKEN=<your token>
+       TWILIO_PHONE_NUMBER=<your twilio number>
+       ELEVENLABS_API_KEY=<your key>
+       ELEVENLABS_VOICE_ID=<your voice id>
+       DEEPGRAM_API_KEY=<your key>
+       WEBHOOK_BASE_URL=<your ngrok url>  ← update this each session (see step 6)
+
+
+================================================================================
+STEP 1 — Activate virtual environment (do this in EVERY new terminal)
+================================================================================
+
+Open PowerShell in: d:\Internship\AI_HIRING_BOT
+
+    .\venv\Scripts\Activate.bat
+
+You should see (venv) in the prompt. Do this before running ANY python command.
+
+
+================================================================================
+STEP 2 — Start FastAPI backend  [Terminal 1]
+================================================================================
+
+    cd d:\Internship\AI_HIRING_BOT
+    .\venv\Scripts\Activate.bat
+    uvicorn backend.main:app --reload --port 8000
+
+Wait for: "DB tables ready | Redis: OK | Scheduler: ON"
+API docs available at: http://localhost:8000/docs
+Health check:          http://localhost:8000/health
+
+
+================================================================================
+STEP 3 — Start Celery: AI Analysis Worker  [Terminal 2]
+================================================================================
+
+    cd d:\Internship\AI_HIRING_BOT
+    .\venv\Scripts\Activate.bat
+    celery -A backend.celery_app worker -Q analysis_queue -c 1 --loglevel=info
+
+This handles: resume parsing, embeddings, JD scoring, question generation,
+              interview report generation.
+(concurrency=1 because local Ollama/GPU can only handle one at a time)
+
+
+================================================================================
+STEP 4 — Start Celery: Notification Worker  [Terminal 3]
+================================================================================
+
+    cd d:\Internship\AI_HIRING_BOT
+    .\venv\Scripts\Activate.bat
+    celery -A backend.celery_app worker -Q notification_queue -c 2 --loglevel=info
+
+This handles: SendGrid emails, Twilio SMS notifications.
+
+
+================================================================================
+STEP 5 — Start React frontend  [Terminal 4]
+================================================================================
+
+    cd d:\Internship\AI_HIRING_BOT\frontend
+    npm run dev
+
+App runs at: http://localhost:5173
+HR Dashboard login page loads — create an account on first use.
+
+
+================================================================================
+STEP 6 — Start ngrok (only needed for voice calls)  [Terminal 5]
+================================================================================
+
+    ngrok http 8000
+
+ngrok gives you a public HTTPS URL like: https://abc123.ngrok.io
+
+IMPORTANT: After ngrok starts, update WEBHOOK_BASE_URL in your .env file:
+    WEBHOOK_BASE_URL=https://abc123.ngrok.io
+
+Then RESTART the FastAPI server (Ctrl+C in Terminal 1, run uvicorn again)
+so it picks up the new URL before placing any calls.
+
+The ngrok URL changes every session unless you have a paid ngrok account.
+
+
+================================================================================
+STEP 7 — (Optional) Celery Flower monitor  [Terminal 6]
+================================================================================
+
+    cd d:\Internship\AI_HIRING_BOT
+    .\venv\Scripts\Activate.bat
+    celery -A backend.celery_app flower --port=5555
+
+Task monitor UI at: http://localhost:5555
+Useful for watching pipeline tasks run in real time.
+
+
+================================================================================
+QUICK REFERENCE — URLs
+================================================================================
+
+    HR Dashboard (login):        http://localhost:5173/login
+    HR Dashboard (home):         http://localhost:5173/dashboard
+    Candidate Portal (home):     http://localhost:5173/portal
+    Candidate Portal (login):    http://localhost:5173/portal/login
+    Candidate Portal (jobs):     http://localhost:5173/portal/jobs
+    API docs:                    http://localhost:8000/docs
+    Health check:                http://localhost:8000/health
+    Flower monitor:              http://localhost:5555   (if started)
+
+
+================================================================================
+STARTUP CHECKLIST
+================================================================================
+
+    [ ] PostgreSQL running on port 5433, database "hiringbot" exists
+    [ ] Redis running on port 6379
+    [ ] Ollama running, models pulled (llama3.1:8b, mistral:7b, nomic-embed-text)
+    [ ] .env file present with real API keys
+    [ ] Terminal 1: FastAPI backend (uvicorn) — wait for "DB tables ready"
+    [ ] Terminal 2: Celery analysis worker
+    [ ] Terminal 3: Celery notification worker
+    [ ] Terminal 4: React frontend (npm run dev)
+    [ ] Terminal 5: ngrok (only for voice calls) + update .env + restart FastAPI
+
+
+================================================================================
+COMMON ISSUES
+================================================================================
+
+"Cannot connect to database"
+  → PostgreSQL is not running, or DATABASE_URL in .env is wrong (check port 5433)
+
+"Redis: UNREACHABLE" in FastAPI logs
+  → Redis is not running. Run: redis-server
+
+"Task stuck / pipeline not running"
+  → Celery analysis worker is not started (Terminal 2 missing)
+
+"Emails not sending"
+  → Celery notification worker not started (Terminal 3 missing)
+  → SENDGRID_API_KEY missing/wrong in .env
+
+"Voice call not connecting / webhook errors"
+  → ngrok is not running, or WEBHOOK_BASE_URL in .env is stale
+  → Restart FastAPI after updating the URL
+
+"Ollama model not found" error
+  → Run: ollama pull llama3.1:8b  (and mistral:7b, nomic-embed-text)
+
+venv not found
+  → Run from project root: python -m venv venv
+  → Then: pip install -r requirements.txt
+
+
+================================================================================

@@ -19,6 +19,7 @@ from backend.voice.call_state import init_state, get_state, update_state, append
 from backend.voice.tts import synthesize
 from backend.voice.twilio_client import initiate_call
 from backend.services.interview_engine import generate_opening, generate_next_response, generate_followup_probe
+from backend.services.deepgram_stt import transcribe_recording
 from backend.tasks import run_report_gen, send_sms_task
 
 logger = logging.getLogger(__name__)
@@ -41,16 +42,25 @@ def _say(text: str) -> str:
     return f'<Say voice="alice" language="en-IN">{html.escape(text)}</Say>'
 
 
-def _play_or_say(text: str, speech_timeout: str = "4", start_timeout: int = 20) -> str:
+def _play_or_say(text: str, speech_timeout: str = "5", start_timeout: int = 20) -> str:
     """
-    Wrap speech in a <Gather> so Twilio listens DURING + AFTER playback.
-    speech_timeout: seconds of silence that signals end-of-answer (default 4s).
-    start_timeout: seconds to wait for the candidate to start speaking (default 20s).
-    Audio is placed INSIDE the Gather so speech during playback is captured too.
-    en-US + enhanced + phone_call model gives the best recognition accuracy.
+    Play AI speech then listen for candidate response.
+    If Deepgram is configured: use <Record> for higher-accuracy transcription.
+    Fallback: Twilio built-in STT via <Gather>.
     """
-    respond_url = f"{settings.webhook_base_url}/voice/respond"
+    respond_url    = f"{settings.webhook_base_url}/voice/respond"
+    transcribe_url = f"{settings.webhook_base_url}/voice/transcribe"
     inner = _say(text)
+
+    if settings.deepgram_api_key and settings.twilio_account_sid:
+        # Deepgram path: play audio, then record for accurate transcription
+        return (
+            inner
+            + f'<Record action="{transcribe_url}" method="POST" '
+            f'timeout="{speech_timeout}" maxLength="120" playBeep="false"/>'
+            f'<Redirect method="POST">{respond_url}</Redirect>'
+        )
+    # Fallback: Twilio built-in STT (en-US + phone_call model is still decent)
     return (
         f'<Gather input="speech" action="{respond_url}" method="POST" '
         f'speechTimeout="{speech_timeout}" timeout="{start_timeout}" '
@@ -470,104 +480,122 @@ async def voice_start(
     return _twiml(_play_or_say(opening_text, speech_timeout="3", start_timeout=30))
 
 
-@router.post("/respond")
-async def voice_respond(
-    CallSid: str = Form(...),
-    SpeechResult: str = Form(default=""),
-):
+async def _handle_speech(call_sid: str, speech: str) -> Response:
     """
-    Twilio calls this after each speech input (or timeout).
-    Handles: repeat-question, thinking-time, unclear speech, silence, normal answers.
+    Core interview turn logic — shared by /respond (Twilio STT) and /transcribe (Deepgram).
+    speech is already stripped and length-capped before calling.
     """
-    state = get_state(CallSid)
+    state = get_state(call_sid)
     if not state:
         return _twiml("<Say>Your session has expired. Thank you for your time. Goodbye.</Say><Hangup/>")
 
-    # Guard against unexpectedly long transcriptions blowing the LLM prompt
-    speech = SpeechResult.strip()[:2000]
     q_index   = state.get("question_index", 0)
     questions = state.get("questions", [])
 
-    # Current question text (used for repeat intent)
     if q_index < len(questions):
         q = questions[q_index]
         current_q_text = q.get("question", q) if isinstance(q, dict) else str(q)
     else:
         current_q_text = ""
 
-    # ── No speech detected (timeout) ────────────────────────────────────────
+    # ── No speech detected (silence / empty transcript) ──────────────────────
     if not speech:
         silence_count = state.get("silence_count", 0) + 1
-        update_state(CallSid, {"silence_count": silence_count})
-
+        update_state(call_sid, {"silence_count": silence_count})
         if silence_count >= 3:
-            # 3 consecutive silences → check in / close gracefully
             msg = ("I haven't been able to hear you for a while. "
                    "If you'd like to continue please say something now, "
                    "otherwise I'll wrap up — thank you so much for your time.")
-            update_state(CallSid, {"silence_count": 0})
+            update_state(call_sid, {"silence_count": 0})
         else:
             msg = "I didn't catch that — could you speak a little louder or closer to the phone?"
-        append_transcript(CallSid, "ai", msg)
+        append_transcript(call_sid, "ai", msg)
         return _twiml(_play_or_say(msg))
 
-    # Reset silence counter on any speech
-    update_state(CallSid, {"silence_count": 0})
+    update_state(call_sid, {"silence_count": 0})
 
-    # ── Intent detection ────────────────────────────────────────────────────
+    # ── Intent detection ─────────────────────────────────────────────────────
     intent = _detect_intent(speech)
 
-    # Repeat-question intent — don't advance, replay question
     if intent == "repeat" and current_q_text:
         msg = f"Sure! Here's the question again: {current_q_text}"
-        append_transcript(CallSid, "ai", msg)
-        return _twiml(_play_or_say(msg, speech_timeout="4", start_timeout=30))
+        append_transcript(call_sid, "ai", msg)
+        return _twiml(_play_or_say(msg, speech_timeout="5", start_timeout=30))
 
-    # Thinking-time intent — don't advance, give them space with reminders
     if intent == "think":
-        append_transcript(CallSid, "candidate", speech)
+        append_transcript(call_sid, "candidate", speech)
         return _twiml(_thinking_twiml())
 
-    # Unclear / too short answer — ask to repeat without advancing
     if intent == "unclear":
         unclear_count = state.get("unclear_count", 0) + 1
-        update_state(CallSid, {"unclear_count": unclear_count})
+        update_state(call_sid, {"unclear_count": unclear_count})
         if unclear_count >= 2:
-            # Two failed attempts — accept what we have and move on
-            update_state(CallSid, {"unclear_count": 0})
-            append_transcript(CallSid, "candidate", speech or "[unclear]")
-            update_state(CallSid, {"question_index": q_index + 1})
-            state = get_state(CallSid)
+            update_state(call_sid, {"unclear_count": 0})
+            append_transcript(call_sid, "candidate", speech or "[unclear]")
+            update_state(call_sid, {"question_index": q_index + 1})
+            state = get_state(call_sid)
             response_text, is_closing = generate_next_response(state)
         else:
-            msg = "I'm sorry, I didn't quite catch that — could you say that again, a little slower?"
-            append_transcript(CallSid, "ai", msg)
-            return _twiml(_play_or_say(msg, speech_timeout="4"))
+            msg = "I'm sorry, I didn't quite catch that — could you say that again?"
+            append_transcript(call_sid, "ai", msg)
+            return _twiml(_play_or_say(msg, speech_timeout="5"))
 
-    # ── Normal answer — record, optionally probe, advance ───────────────────
+    # ── Normal answer — optionally probe, then advance ───────────────────────
     if intent == "answer":
-        update_state(CallSid, {"unclear_count": 0})
-        append_transcript(CallSid, "candidate", speech)
+        update_state(call_sid, {"unclear_count": 0})
+        append_transcript(call_sid, "candidate", speech)
 
-        # Follow-up probe: if answer is too short, probe once before moving on
         probed = state.get("probed_questions", [])
         if len(speech.split()) < 15 and q_index not in probed:
             probe_text = generate_followup_probe(state, q_index)
-            append_transcript(CallSid, "ai", probe_text)
-            update_state(CallSid, {"probed_questions": probed + [q_index]})
-            return _twiml(_play_or_say(probe_text, speech_timeout="4", start_timeout=25))
+            append_transcript(call_sid, "ai", probe_text)
+            update_state(call_sid, {"probed_questions": probed + [q_index]})
+            return _twiml(_play_or_say(probe_text, speech_timeout="5", start_timeout=25))
 
-        update_state(CallSid, {"question_index": q_index + 1})
-        state = get_state(CallSid)
+        update_state(call_sid, {"question_index": q_index + 1})
+        state = get_state(call_sid)
         response_text, is_closing = generate_next_response(state)
 
-    append_transcript(CallSid, "ai", response_text)
+    append_transcript(call_sid, "ai", response_text)
 
     if is_closing:
-        run_report_gen.delay(CallSid)
+        run_report_gen.delay(call_sid)
         return _twiml(_say(response_text) + "<Hangup/>")
 
-    return _twiml(_play_or_say(response_text, speech_timeout="4", start_timeout=25))
+    return _twiml(_play_or_say(response_text, speech_timeout="5", start_timeout=25))
+
+
+@router.post("/transcribe")
+async def voice_transcribe(
+    CallSid: str = Form(...),
+    RecordingUrl: str = Form(default=""),
+    RecordingSid: str = Form(default=""),
+    RecordingDuration: str = Form(default="0"),
+):
+    """
+    Twilio posts here when a <Record> finishes.
+    Transcribes audio with Deepgram nova-2-phonecall, then runs interview logic.
+    """
+    speech = ""
+    duration = int(RecordingDuration or "0")
+    if RecordingUrl and duration >= 1:
+        speech = await transcribe_recording(RecordingUrl)
+    speech = speech.strip()[:2000]
+    logger.info(f"[transcribe] CallSid={CallSid} duration={duration}s transcript={speech[:80]!r}")
+    return await _handle_speech(CallSid, speech)
+
+
+@router.post("/respond")
+async def voice_respond(
+    CallSid: str = Form(...),
+    SpeechResult: str = Form(default=""),
+):
+    """
+    Fallback: used when Deepgram is not configured (Twilio built-in STT)
+    or when <Record> fires a <Redirect> due to silence.
+    """
+    speech = SpeechResult.strip()[:2000]
+    return await _handle_speech(CallSid, speech)
 
 
 @router.post("/status")
