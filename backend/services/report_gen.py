@@ -1,5 +1,6 @@
 from .ollama_client import ollama_chat, ANALYSIS_MODEL
 from .embedder import embed_text
+from backend.config import settings
 
 
 def generate_report(call_state: dict, profile: dict) -> dict:
@@ -31,7 +32,7 @@ Candidate Profile: {profile}
 Interview Transcript:
 {transcript_text}
 """
-    return ollama_chat(prompt, model=ANALYSIS_MODEL, expect_json=True)
+    return ollama_chat(prompt, model=ANALYSIS_MODEL, expect_json=True, temperature=settings.temp_report)
 
 
 def _build_report_summary(report: dict) -> str:

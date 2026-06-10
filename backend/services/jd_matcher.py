@@ -50,7 +50,7 @@ Scoring rules:
 Candidate Profile: {profile}
 Job Description: {jd_text}
 """
-    llm_scores = ollama_chat(prompt, model=ANALYSIS_MODEL, expect_json=True)
+    llm_scores = ollama_chat(prompt, model=ANALYSIS_MODEL, expect_json=True, temperature=settings.temp_scoring)
 
     skills = float(llm_scores.get("skills_score", 0))
     experience = float(llm_scores.get("experience_score", 0))

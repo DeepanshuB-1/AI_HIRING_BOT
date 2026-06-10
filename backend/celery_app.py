@@ -15,8 +15,11 @@ celery.conf.update(
     timezone="Asia/Kolkata",
     enable_utc=True,
     task_track_started=True,
-    worker_prefetch_multiplier=1,  # one task at a time per worker (GPU safety)
+    worker_prefetch_multiplier=1,       # one task at a time per worker (GPU safety)
     broker_connection_retry_on_startup=True,
+    # Dead-letter queue: preserve failed tasks so they can be inspected/requeued
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
 )
 
 celery.conf.task_routes = {

@@ -33,7 +33,7 @@ Job Description (source of truth for what skills matter):
 Candidate Profile (use only to personalise questions, not to determine topic):
 {profile}
 """
-    result = ollama_chat(prompt, model=ANALYSIS_MODEL, expect_json=True)
+    result = ollama_chat(prompt, model=ANALYSIS_MODEL, expect_json=True, temperature=settings.temp_question_gen)
     if isinstance(result, list):
         return result
     if isinstance(result, dict):

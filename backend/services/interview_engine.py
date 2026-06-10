@@ -1,4 +1,4 @@
-from .ollama_client import ollama_chat, INTERVIEW_MODEL
+from .ollama_client import ollama_stream_voice, INTERVIEW_MODEL
 
 
 def generate_opening(candidate_name: str, role: str, company: str = "our company") -> str:
@@ -19,7 +19,7 @@ Rules:
 - Tone: warm, encouraging, not robotic — like a friendly HR person
 - Maximum 5 sentences
 - Return ONLY the spoken text, no labels, no quotes, no stage directions"""
-    return ollama_chat(prompt, model=INTERVIEW_MODEL, expect_json=False, temperature=0.5)
+    return ollama_stream_voice(prompt, temperature=0.5, max_sentences=5)
 
 
 def generate_next_response(call_state: dict) -> tuple[str, bool]:
@@ -31,17 +31,14 @@ def generate_next_response(call_state: dict) -> tuple[str, bool]:
     transcript = call_state.get("transcript", [])
     questions = call_state.get("questions", [])
     q_index = call_state.get("question_index", 0)
-    candidate_name = call_state.get("candidate_name", "the candidate")
-    role = call_state.get("role", "this role")
 
     if q_index >= len(questions):
         return generate_closing(call_state), True
 
-    # get next question text (questions_json stores dicts with 'question' key)
     next_q = questions[q_index]
     next_q_text = next_q.get("question", next_q) if isinstance(next_q, dict) else next_q
 
-    # build recent context (last 3 exchanges max to keep prompt short)
+    # last 3 exchanges for context (keep prompt short → faster inference)
     recent = transcript[-6:] if len(transcript) > 6 else transcript
     history = "\n".join(
         f"{'Interviewer' if t['role'] == 'ai' else 'Candidate'}: {t['text']}"
@@ -63,7 +60,7 @@ Instructions:
 - Sound human and conversational, not robotic
 - Return ONLY the spoken text, no labels, no quotes"""
 
-    response = ollama_chat(prompt, model=INTERVIEW_MODEL, expect_json=False, temperature=0.5)
+    response = ollama_stream_voice(prompt, temperature=0.6, max_sentences=4)
     return response, False
 
 
@@ -89,7 +86,7 @@ Instructions:
 - Ask ONE specific follow-up probe — for example: "Could you give me a quick example?", "Can you walk me through that a bit more?", "What was the outcome there?"
 - Maximum 2 sentences, warm and encouraging tone
 - Return ONLY the spoken text, no labels"""
-    return ollama_chat(prompt, model=INTERVIEW_MODEL, expect_json=False, temperature=0.5)
+    return ollama_stream_voice(prompt, temperature=0.5, max_sentences=2)
 
 
 def generate_closing(call_state: dict) -> str:
@@ -113,4 +110,4 @@ Rules:
 - Tone: warm, human, encouraging — leave a good impression
 - Maximum 3 sentences
 - Return ONLY the spoken text"""
-    return ollama_chat(prompt, model=INTERVIEW_MODEL, expect_json=False, temperature=0.5)
+    return ollama_stream_voice(prompt, temperature=0.5, max_sentences=3)

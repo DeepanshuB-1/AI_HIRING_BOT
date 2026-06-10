@@ -16,9 +16,19 @@ class Settings(BaseSettings):
     duplicate_threshold: float = 0.97
     question_dedup_threshold: float = 0.90
 
+    # Temperature per layer (lower = more consistent JSON; higher = more natural conversation)
+    temp_extraction: float = 0.1   # Layer 2 — profile extraction (strict JSON)
+    temp_scoring: float = 0.1      # Layer 3 — JD scoring (strict JSON)
+    temp_question_gen: float = 0.5 # Layer 4 — question generation (varied output)
+    temp_voice: float = 0.6        # Layer 5 — live conversation (natural speech)
+    temp_report: float = 0.2       # Layer 6 — report generation (structured)
+
     # Database
     database_url: str = "postgresql+asyncpg://user:pass@localhost:5433/hiringbot"
     redis_url: str = "redis://localhost:6379"
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_timeout: int = 30
 
     # Twilio
     twilio_account_sid: str = ""
@@ -35,6 +45,9 @@ class Settings(BaseSettings):
     # SendGrid
     sendgrid_api_key: str = ""
     from_email: str = "hr@yourcompany.com"
+
+    # CORS — comma-separated origins, e.g. "http://localhost:5173,https://myapp.com"
+    frontend_origins: str = "http://localhost:3000,http://localhost:5173"
 
     # App
     secret_key: str = "change-me-in-production"

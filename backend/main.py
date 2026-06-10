@@ -35,7 +35,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=[o.strip() for o in settings.frontend_origins.split(",") if o.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -54,9 +54,12 @@ app.include_router(voice.router)
 @app.get("/health")
 async def health():
     import ollama as _ollama
+    from backend.database import engine as _engine
+    from sqlalchemy import text as _text
+
+    # Ollama model check
     try:
         raw = _ollama.list()
-        # ollama 0.2.x returns a dict; newer versions return an object with .models
         model_list = raw.get('models', []) if isinstance(raw, dict) else raw.models
         pulled = [
             (m.get('name') or m.get('model', '')) if isinstance(m, dict) else (m.model or m.name)
@@ -64,15 +67,40 @@ async def health():
         ]
         def _pulled(name: str) -> bool:
             return any(p == name or p.startswith(name + ":") for p in pulled)
-        ollama_ok = _pulled(settings.ollama_analysis_model)
+        ollama_analysis_ok = _pulled(settings.ollama_analysis_model)
+        ollama_interview_ok = _pulled(settings.ollama_interview_model)
         ollama_embed_ok = _pulled(settings.ollama_embed_model)
     except Exception:
-        ollama_ok = False
-        ollama_embed_ok = False
+        ollama_analysis_ok = ollama_interview_ok = ollama_embed_ok = False
+
+    # PostgreSQL check
+    try:
+        async with _engine.connect() as conn:
+            await conn.execute(_text("SELECT 1"))
+        db_ok = True
+    except Exception:
+        db_ok = False
+
+    # Celery worker check
+    try:
+        from backend.celery_app import celery as _celery
+        inspector = _celery.control.inspect(timeout=1.5)
+        active = inspector.active() or {}
+        analysis_workers = any("analysis_queue" in str(v) or True for v in active.values()) if active else False
+        celery_workers = len(active)
+    except Exception:
+        analysis_workers = False
+        celery_workers = 0
+
+    redis_ok = ping_redis()
+    all_ok = redis_ok and db_ok and ollama_analysis_ok and ollama_embed_ok
 
     return {
-        "status": "ok",
-        "redis": ping_redis(),
-        "ollama_analysis_model": ollama_ok,
+        "status": "ok" if all_ok else "degraded",
+        "redis": redis_ok,
+        "database": db_ok,
+        "celery_workers_online": celery_workers,
+        "ollama_analysis_model": ollama_analysis_ok,
+        "ollama_interview_model": ollama_interview_ok,
         "ollama_embed_model": ollama_embed_ok,
     }

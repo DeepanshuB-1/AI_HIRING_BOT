@@ -125,6 +125,48 @@ async def cleanup_stuck_calls():
             await db.commit()
 
 
+async def send_precall_reminders():
+    """
+    Every 5 minutes: send a reminder SMS to candidates whose interview is 25-35 minutes away.
+    Window of 25-35 min means we fire once per slot even if the job runs slightly late.
+    """
+    from sqlalchemy import select, and_
+    from backend.database import AsyncSessionLocal
+    from backend.models.call import ScreeningCall, CallStatus
+    from backend.models.candidate import Candidate
+    from backend.tasks import send_sms_task
+
+    now = datetime.now(IST)
+    today = now.date()
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ScreeningCall).where(
+                and_(
+                    ScreeningCall.scheduled_date == today,
+                    ScreeningCall.status == CallStatus.pending,
+                )
+            )
+        )
+        for call in result.scalars().all():
+            if not call.scheduled_time:
+                continue
+            call_dt = datetime(today.year, today.month, today.day,
+                               call.scheduled_time.hour, call.scheduled_time.minute, tzinfo=IST)
+            minutes_until = (call_dt - now).total_seconds() / 60
+            if 25 <= minutes_until <= 35:
+                candidate = await db.get(Candidate, call.candidate_id)
+                if candidate and candidate.phone:
+                    msg = (
+                        f"Hi {candidate.name.split()[0]}, just a reminder: "
+                        f"your AI interview is in about 30 minutes "
+                        f"({call.scheduled_time.strftime('%H:%M')} IST). "
+                        f"Please be in a quiet place with good phone signal. Good luck!"
+                    )
+                    send_sms_task.delay(candidate.phone, msg)
+                    logger.info(f"[scheduler] Sent pre-call reminder to {candidate.name}")
+
+
 async def warn_upcoming_calls():
     """
     Every 30 minutes: log upcoming scheduled calls in the next 2 hours for visibility.
@@ -179,6 +221,13 @@ def start_scheduler():
         cleanup_stuck_calls,
         IntervalTrigger(minutes=5),
         id="cleanup_stuck_calls",
+        replace_existing=True,
+    )
+    # Send reminder SMS to candidates 30 min before their interview
+    scheduler.add_job(
+        send_precall_reminders,
+        IntervalTrigger(minutes=5),
+        id="send_precall_reminders",
         replace_existing=True,
     )
     # Log upcoming calls every 30 min for visibility

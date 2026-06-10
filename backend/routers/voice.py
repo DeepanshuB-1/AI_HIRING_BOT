@@ -41,19 +41,20 @@ def _say(text: str) -> str:
     return f'<Say voice="alice" language="en-IN">{html.escape(text)}</Say>'
 
 
-def _play_or_say(text: str, speech_timeout: str = "3", start_timeout: int = 20) -> str:
+def _play_or_say(text: str, speech_timeout: str = "4", start_timeout: int = 20) -> str:
     """
     Wrap speech in a <Gather> so Twilio listens DURING + AFTER playback.
-    speech_timeout: seconds of silence that signals end-of-answer (default 3s).
+    speech_timeout: seconds of silence that signals end-of-answer (default 4s).
     start_timeout: seconds to wait for the candidate to start speaking (default 20s).
     Audio is placed INSIDE the Gather so speech during playback is captured too.
+    en-US + enhanced + phone_call model gives the best recognition accuracy.
     """
     respond_url = f"{settings.webhook_base_url}/voice/respond"
     inner = _say(text)
     return (
         f'<Gather input="speech" action="{respond_url}" method="POST" '
         f'speechTimeout="{speech_timeout}" timeout="{start_timeout}" '
-        f'language="en-IN" enhanced="true">'
+        f'language="en-US" enhanced="true" speechModel="phone_call">'
         f'{inner}'
         f'</Gather>'
         f'<Redirect method="POST">{respond_url}</Redirect>'
@@ -69,7 +70,7 @@ def _thinking_twiml() -> str:
     respond_url = f"{settings.webhook_base_url}/voice/respond"
     return (
         f'<Gather input="speech" action="{respond_url}" method="POST" '
-        f'speechTimeout="3" timeout="50" language="en-IN" enhanced="true">'
+        f'speechTimeout="4" timeout="50" language="en-US" enhanced="true" speechModel="phone_call">'
         f'<Say voice="alice" language="en-IN">Of course, take all the time you need. I\'m right here.</Say>'
         f'<Pause length="12"/>'
         f'<Say voice="alice" language="en-IN">Whenever you\'re ready, I\'m listening.</Say>'
@@ -482,7 +483,8 @@ async def voice_respond(
     if not state:
         return _twiml("<Say>Your session has expired. Thank you for your time. Goodbye.</Say><Hangup/>")
 
-    speech = SpeechResult.strip()
+    # Guard against unexpectedly long transcriptions blowing the LLM prompt
+    speech = SpeechResult.strip()[:2000]
     q_index   = state.get("question_index", 0)
     questions = state.get("questions", [])
 

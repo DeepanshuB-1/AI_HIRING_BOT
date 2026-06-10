@@ -1,5 +1,6 @@
 from .ollama_client import ollama_chat, ANALYSIS_MODEL
 from .embedder import embed_text
+from backend.config import settings
 
 
 def extract_profile(resume_text: str) -> dict:
@@ -35,7 +36,7 @@ Required JSON schema:
 Resume:
 {resume_text}
 """
-    return ollama_chat(prompt, model=ANALYSIS_MODEL, expect_json=True)
+    return ollama_chat(prompt, model=ANALYSIS_MODEL, expect_json=True, temperature=settings.temp_extraction)
 
 
 def _build_profile_summary(profile: dict) -> str:
