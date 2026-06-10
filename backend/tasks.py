@@ -152,6 +152,11 @@ def run_jd_scoring(self, candidate_id: str, jd_text: str):
                 else:
                     candidate.status = CandidateStatus.analyzed
 
+                # Fetch job title for email copy
+                from .models.job import Job as _Job
+                job = await db.get(_Job, candidate.jd_id) if candidate.jd_id else None
+                job_title = job.title if job else "the applied role"
+
                 candidate_name = candidate.name
                 candidate_email = candidate.email
                 candidate_phone = candidate.phone
@@ -163,29 +168,26 @@ def run_jd_scoring(self, candidate_id: str, jd_text: str):
                     "_email": candidate_email,
                     "_phone": candidate_phone,
                     "_cid": candidate_id,
+                    "_job_title": job_title,
                 }
 
         result = _run(_score())
         decision = result.get("_decision")
 
+        from .config import settings as _s
+        job_title = result.get("_job_title", "the applied role")
+
         if decision == "reject":
-            # Rejected — send rejection email, no SMS
-            from .config import settings as _s
             from .notifications.templates import rejection_email_html
-            from .notifications.email import send_email
-            subject, html = rejection_email_html(result["_name"], "the applied role", _s.company_name)
+            subject, html = rejection_email_html(result["_name"], job_title, _s.company_name)
             send_email_task.delay(result["_email"], subject, html)
 
         else:
-            # Passed threshold — email has the consent link (no URL in SMS to stay under segment limit)
-            from .config import settings as _s
             from .notifications.templates import consent_sms, interview_invite_email_html
             consent_url = f"{_s.webhook_base_url}/voice/consent/{result['_cid']}"
-            # Short SMS nudge (no URL — Twilio trial prefix + long ngrok URL = segment overflow)
             send_sms_task.delay(result["_phone"], consent_sms(result["_name"]))
-            # Email with the full consent booking link
             subject, html = interview_invite_email_html(
-                result["_name"], "the applied role", _s.company_name, consent_url
+                result["_name"], job_title, _s.company_name, consent_url
             )
             send_email_task.delay(result["_email"], subject, html)
 
