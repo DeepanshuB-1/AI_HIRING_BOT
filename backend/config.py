@@ -46,8 +46,13 @@ class Settings(BaseSettings):
     elevenlabs_api_key: str = ""
     elevenlabs_voice_id: str = ""
 
-    # Deepgram
+    # Deepgram (optional fallback — not required when faster-whisper is active)
     deepgram_api_key: str = ""
+
+    # faster-whisper STT (local, no API key needed)
+    # Sizes: tiny | base | small | medium | large-v3
+    # medium = best accuracy/speed balance (~769MB). large-v3 = best accuracy (~1.5GB).
+    whisper_model_size: str = "medium"
 
     # SendGrid
     sendgrid_api_key: str = ""

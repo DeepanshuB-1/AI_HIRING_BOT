@@ -195,5 +195,10 @@ venv not found
   → Run from project root: python -m venv venv
   → Then: pip install -r requirements.txt
 
+"First voice call is very slow to transcribe"
+  → faster-whisper downloads the Whisper medium model (~769MB) on the very first call
+  → Subsequent calls are fast (model stays loaded in memory)
+  → To pre-download: python -c "from faster_whisper import WhisperModel; WhisperModel('medium')"
+
 
 ================================================================================
