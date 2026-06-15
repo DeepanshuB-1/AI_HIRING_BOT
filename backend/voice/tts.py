@@ -26,11 +26,20 @@ def synthesize(text: str) -> str:
 
     try:
         from elevenlabs.client import ElevenLabs
+        from elevenlabs import VoiceSettings
         client = ElevenLabs(api_key=settings.elevenlabs_api_key)
         audio_stream = client.text_to_speech.convert(
             voice_id=settings.elevenlabs_voice_id,
             text=text,
-            model_id="eleven_turbo_v2",
+            model_id="eleven_flash_v2_5",
+            output_format="mp3_22050_32",
+            voice_settings=VoiceSettings(
+                stability=0.45,
+                similarity_boost=0.75,
+                style=0.35,
+                use_speaker_boost=True,
+            ),
+            apply_text_normalization="on",
         )
         Path(settings.audio_cache_dir).mkdir(parents=True, exist_ok=True)
         with open(cache_file, "wb") as f:

@@ -51,8 +51,8 @@ class Settings(BaseSettings):
 
     # faster-whisper STT (local, no API key needed)
     # Sizes: tiny | base | small | medium | large-v3
-    # medium = best accuracy/speed balance (~769MB). large-v3 = best accuracy (~1.5GB).
-    whisper_model_size: str = "medium"
+    # small.en = best for 8kHz phone audio (3-4x faster than medium, zero VRAM — runs on CPU).
+    whisper_model_size: str = "small.en"
 
     # SendGrid
     sendgrid_api_key: str = ""
@@ -77,6 +77,13 @@ class Settings(BaseSettings):
     call_window_end: int = 18    # latest hour to place calls (24h, IST)
     auto_schedule_interval_minutes: int = 5
     max_concurrent_calls: int = 1  # local Ollama GPU can only handle 1 at a time
+
+    # Voice interview timing (T1, T2)
+    gather_silence_seconds: int = 5      # how long of silence ends the candidate's turn
+    gather_start_timeout: int = 12       # how long to wait for candidate to start speaking
+    max_call_minutes: int = 9            # set to 9 on trial; raise to 25 after upgrading Twilio
+    wrapup_buffer_seconds: int = 75      # start wrap-up this many seconds before the hard cap
+    questions_per_interview: int = 8     # 8 questions + probes fits even a 25-min call
 
     # Company / notifications
     company_name: str = "Our Company"

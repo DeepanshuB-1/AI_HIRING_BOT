@@ -34,6 +34,8 @@ class Job(Base):
     pinned_questions: Mapped[list | None] = mapped_column(JSONB)
     ollama_model_override: Mapped[str | None] = mapped_column(String(50))
     is_active: Mapped[bool] = mapped_column(default=True)
+    salary_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    salary_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, server_default=func.now())
 
     # pgvector column (Layer 1.5)

@@ -41,15 +41,52 @@ Candidate Profile (use only to personalise questions, not to determine topic):
     return []
 
 
+# T2: must-ask types come first so time pressure only drops the least critical questions
+_QUESTION_PRIORITY = {
+    "warmup": 0,
+    "technical": 1,
+    "resume_probe": 1,
+    "situational": 2,
+    "behavioral": 3,
+    "closing": 4,
+}
+
+
 async def generate_questions(
     profile: dict,
     jd_text: str,
     jd_id: str,
     db: AsyncSession,
-    count: int = 10,
+    count: int = settings.questions_per_interview,
 ) -> list[dict]:
-    """Layer 4 — generate questions with pgvector deduplication against question bank."""
-    raw = _generate_raw_questions(profile, jd_text, count + 5)
+    """Layer 4 — generate questions; pinned bank questions go first, then LLM-generated deduped ones."""
+    # Prepend any pinned questions for this job
+    pinned_result = await db.execute(
+        text("""
+            SELECT id, question_text, question_type, difficulty
+            FROM question_bank
+            WHERE jd_id = CAST(:jd_id AS uuid) AND pinned = true
+            ORDER BY created_at ASC
+        """),
+        {"jd_id": jd_id},
+    )
+    pinned_questions = [
+        {
+            "id": 0,
+            "type": row.question_type,
+            "question": row.question_text,
+            "difficulty": row.difficulty,
+            "ideal_answer_points": [],
+            "follow_up": "",
+        }
+        for row in pinned_result.fetchall()
+    ]
+
+    remaining = max(0, count - len(pinned_questions))
+    if remaining == 0:
+        return pinned_questions[:count]
+
+    raw = _generate_raw_questions(profile, jd_text, remaining + 5)
     threshold = settings.question_dedup_threshold
     unique_questions: list[dict] = []
 
@@ -103,8 +140,11 @@ async def generate_questions(
         )
 
         unique_questions.append(q)
-        if len(unique_questions) >= count:
+        if len(unique_questions) >= remaining:
             break
 
+    # T2: sort LLM questions by priority so must-ask types come before behavioral/closing
+    unique_questions.sort(key=lambda q: _QUESTION_PRIORITY.get(q.get("type", "technical"), 2))
+
     await db.commit()
-    return unique_questions
+    return pinned_questions + unique_questions

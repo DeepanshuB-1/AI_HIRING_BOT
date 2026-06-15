@@ -16,11 +16,13 @@ def ollama_chat(
     expect_json: bool = False,
     temperature: float = 0.3,
     max_tokens: int = 2048,
+    keep_alive: str = "10m",
 ) -> str | dict:
     """Send a prompt to Ollama and return the response text or parsed JSON."""
     response = _client.chat(
         model=model,
         messages=[{"role": "user", "content": prompt}],
+        keep_alive=keep_alive,
         options={
             "temperature": temperature,
             "num_predict": max_tokens,
@@ -71,6 +73,14 @@ def extract_json(text: str, *, prompt: str = "", model: str = "", temperature: f
     raise ValueError(f"Could not parse JSON from LLM output:\n{text[:300]}")
 
 
+def _make_speakable(text: str) -> str:
+    """H3: Strip markdown symbols and artefacts that TTS would read literally."""
+    text = re.sub(r"[*#_`•]", "", text)
+    text = re.sub(r"\s+", " ", text)
+    text = text.strip("\"'")
+    return text.strip()
+
+
 def ollama_stream_voice(
     prompt: str,
     temperature: float = 0.5,
@@ -86,7 +96,8 @@ def ollama_stream_voice(
         model=INTERVIEW_MODEL,
         messages=[{"role": "user", "content": prompt}],
         stream=True,
-        options={"temperature": temperature, "num_predict": 256},
+        keep_alive="30m",
+        options={"temperature": temperature, "num_predict": 150},
     ):
         token = chunk.get("message", {}).get("content", "")
         if token:
@@ -96,4 +107,4 @@ def ollama_stream_voice(
         # Stop once we have enough complete sentences
         if len(re.findall(r"[.!?][\s\n]", buffer)) >= max_sentences:
             break
-    return buffer.strip()
+    return _make_speakable(buffer.strip())

@@ -11,8 +11,8 @@ const TYPE_COLORS = {
 function JobFormModal({ onClose, onSuccess, existing = null }) {
   const isEdit = !!existing
   const [form, setForm] = useState(existing
-    ? { title: existing.title, company: existing.company || '', location: existing.location || '', jd_text: existing.jd_text || '', employment_type: existing.employment_type || 'full_time', min_experience: existing.min_experience || 0 }
-    : { title: '', company: '', location: '', jd_text: '', employment_type: 'full_time', min_experience: 0 }
+    ? { title: existing.title, company: existing.company || '', location: existing.location || '', jd_text: existing.jd_text || '', employment_type: existing.employment_type || 'full_time', min_experience: existing.min_experience || 0, salary_min: existing.salary_min || '', salary_max: existing.salary_max || '' }
+    : { title: '', company: '', location: '', jd_text: '', employment_type: 'full_time', min_experience: 0, salary_min: '', salary_max: '' }
   )
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -89,6 +89,18 @@ function JobFormModal({ onClose, onSuccess, existing = null }) {
               <input type="number" min="0" max="20" value={form.min_experience} onChange={e => set('min_experience', parseInt(e.target.value) || 0)}
                 className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent"
                 placeholder="0" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wide mb-1.5">Salary Min (₹ LPA)</label>
+              <input type="number" min="0" value={form.salary_min} onChange={e => set('salary_min', parseInt(e.target.value) || '')}
+                className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent"
+                placeholder="e.g. 6" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wide mb-1.5">Salary Max (₹ LPA)</label>
+              <input type="number" min="0" value={form.salary_max} onChange={e => set('salary_max', parseInt(e.target.value) || '')}
+                className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent"
+                placeholder="e.g. 9" />
             </div>
           </div>
           <div>

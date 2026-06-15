@@ -4,7 +4,7 @@ from backend.config import settings
 logger = logging.getLogger(__name__)
 
 
-def send_email(to_email: str, subject: str, html_content: str) -> bool:
+def send_email(to_email: str, subject: str, html_content: str, ics_attachment: str | None = None) -> bool:
     if not to_email or not to_email.strip():
         logger.warning("send_email called with empty address — skipping")
         return False
@@ -12,8 +12,9 @@ def send_email(to_email: str, subject: str, html_content: str) -> bool:
         logger.warning("SendGrid API key not configured — email not sent")
         return False
     try:
+        import base64
         from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import Mail
+        from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition
 
         message = Mail(
             from_email=settings.from_email,
@@ -21,6 +22,17 @@ def send_email(to_email: str, subject: str, html_content: str) -> bool:
             subject=subject,
             html_content=html_content,
         )
+
+        if ics_attachment:
+            encoded = base64.b64encode(ics_attachment.encode()).decode()
+            attachment = Attachment(
+                FileContent(encoded),
+                FileName("interview.ics"),
+                FileType("text/calendar"),
+                Disposition("attachment"),
+            )
+            message.attachment = attachment
+
         sg = SendGridAPIClient(settings.sendgrid_api_key)
         response = sg.send(message)
         logger.info(f"Email sent to {to_email} — status {response.status_code}")

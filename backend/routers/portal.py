@@ -6,7 +6,8 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, func
+from sqlalchemy import select, or_, func, delete
+from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel
 from typing import Optional
 from jose import JWTError, jwt
@@ -16,6 +17,8 @@ from backend.config import settings
 from backend.models.candidate_user import CandidateUser
 from backend.models.candidate import Candidate, CandidateStatus
 from backend.models.job import Job
+from backend.models.saved_job import SavedJob
+from backend.models.recently_viewed import RecentlyViewed
 from backend.auth import hash_password, verify_password, create_access_token
 from backend.redis_client import get_redis
 
@@ -104,6 +107,8 @@ class PublicJobOut(BaseModel):
     employment_type: Optional[str] = None
     department: Optional[str] = None
     min_experience: int
+    salary_min: Optional[int] = None
+    salary_max: Optional[int] = None
     created_at: datetime
     model_config = {"from_attributes": True}
 
@@ -393,3 +398,205 @@ async def my_applications(
         }
         for c, j in rows
     ]
+
+
+# ── Saved Jobs (J1) ───────────────────────────────────────────────────────────
+
+@router.get("/saved-jobs")
+async def list_saved_jobs(
+    db: AsyncSession = Depends(get_db),
+    current: CandidateUser = Depends(get_current_candidate),
+):
+    result = await db.execute(
+        select(SavedJob.job_id).where(SavedJob.candidate_user_id == current.id)
+    )
+    return {"saved_job_ids": [str(r) for r in result.scalars().all()]}
+
+
+@router.post("/saved-jobs/{job_id}", status_code=201)
+async def save_job(
+    job_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current: CandidateUser = Depends(get_current_candidate),
+):
+    job = await db.get(Job, job_id)
+    if not job or not job.is_active:
+        raise HTTPException(status_code=404, detail="Job not found")
+    saved = SavedJob(candidate_user_id=current.id, job_id=job_id)
+    db.add(saved)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()  # already saved — idempotent
+    return {"saved": True}
+
+
+@router.delete("/saved-jobs/{job_id}", status_code=200)
+async def unsave_job(
+    job_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current: CandidateUser = Depends(get_current_candidate),
+):
+    await db.execute(
+        delete(SavedJob).where(
+            SavedJob.candidate_user_id == current.id,
+            SavedJob.job_id == job_id,
+        )
+    )
+    await db.commit()
+    return {"saved": False}
+
+
+# ── Candidate Profile (J3) ────────────────────────────────────────────────────
+
+class ProfileOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    email: str
+    phone: Optional[str] = None
+    headline: Optional[str] = None
+    location: Optional[str] = None
+    years_experience: Optional[int] = None
+    skills: Optional[list] = None
+    job_alerts: bool = False
+    created_at: datetime
+    model_config = {"from_attributes": True}
+
+
+class ProfilePatch(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    headline: Optional[str] = None
+    location: Optional[str] = None
+    years_experience: Optional[int] = None
+    skills: Optional[list] = None
+    job_alerts: Optional[bool] = None
+
+
+@router.get("/me", response_model=ProfileOut)
+async def get_profile(current: CandidateUser = Depends(get_current_candidate)):
+    return current
+
+
+@router.patch("/me", response_model=ProfileOut)
+async def update_profile(
+    payload: ProfilePatch,
+    db: AsyncSession = Depends(get_db),
+    current: CandidateUser = Depends(get_current_candidate),
+):
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(current, field, value)
+    await db.commit()
+    await db.refresh(current)
+    return current
+
+
+# ── Personal Match Score (J2) ─────────────────────────────────────────────────
+
+@router.get("/jobs/{job_id}/match")
+async def job_match_score(
+    job_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current: CandidateUser = Depends(get_current_candidate),
+):
+    """Return this candidate's match score for a job if they've applied."""
+    result = await db.execute(
+        select(Candidate.match_score, Candidate.status)
+        .where(
+            func.lower(Candidate.email) == current.email.lower(),
+            Candidate.jd_id == job_id,
+        )
+    )
+    row = result.first()
+    if not row:
+        return {"applied": False, "match_score": None}
+    return {"applied": True, "match_score": row.match_score, "status": row.status.value}
+
+
+# ── Similar Roles (J4) ────────────────────────────────────────────────────────
+
+@router.get("/jobs/{job_id}/similar", response_model=list[PublicJobOut])
+async def similar_jobs(
+    job_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return up to 4 similar active jobs using pgvector cosine distance on jd_embedding."""
+    job = await db.get(Job, job_id)
+    if not job or not job.is_active:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.jd_embedding is None:
+        # Fallback: same department or same employment_type
+        q = (
+            select(Job)
+            .where(
+                Job.id != job_id,
+                Job.is_active.is_(True),
+                or_(
+                    Job.department == job.department,
+                    Job.employment_type == job.employment_type,
+                ),
+            )
+            .order_by(Job.created_at.desc())
+            .limit(4)
+        )
+        result = await db.execute(q)
+        return result.scalars().all()
+
+    # pgvector cosine similarity — lower distance = more similar
+    from sqlalchemy import text
+    q = text(
+        """
+        SELECT id FROM jobs
+        WHERE id != :job_id AND is_active = true AND jd_embedding IS NOT NULL
+        ORDER BY jd_embedding <=> CAST(:embedding AS vector)
+        LIMIT 4
+        """
+    )
+    rows = await db.execute(q, {"job_id": str(job_id), "embedding": str(job.jd_embedding)})
+    similar_ids = [r[0] for r in rows]
+    if not similar_ids:
+        return []
+    result = await db.execute(select(Job).where(Job.id.in_(similar_ids)))
+    return result.scalars().all()
+
+
+# ── Recently Viewed (J7) ──────────────────────────────────────────────────────
+
+@router.post("/recently-viewed/{job_id}", status_code=200)
+async def record_view(
+    job_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current: CandidateUser = Depends(get_current_candidate),
+):
+    existing = await db.execute(
+        select(RecentlyViewed).where(
+            RecentlyViewed.candidate_user_id == current.id,
+            RecentlyViewed.job_id == job_id,
+        )
+    )
+    row = existing.scalars().first()
+    if row:
+        row.viewed_at = datetime.utcnow()
+    else:
+        db.add(RecentlyViewed(candidate_user_id=current.id, job_id=job_id))
+    await db.commit()
+    return {"ok": True}
+
+
+@router.get("/recently-viewed", response_model=list[PublicJobOut])
+async def recently_viewed(
+    db: AsyncSession = Depends(get_db),
+    current: CandidateUser = Depends(get_current_candidate),
+):
+    result = await db.execute(
+        select(Job)
+        .join(RecentlyViewed, RecentlyViewed.job_id == Job.id)
+        .where(
+            RecentlyViewed.candidate_user_id == current.id,
+            Job.is_active.is_(True),
+        )
+        .order_by(RecentlyViewed.viewed_at.desc())
+        .limit(6)
+    )
+    return result.scalars().all()

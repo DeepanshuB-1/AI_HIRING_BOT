@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, DateTime, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import String, DateTime, Integer, Boolean, func
+from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 from backend.database import Base
 
@@ -14,4 +14,10 @@ class CandidateUser(Base):
     email: Mapped[str] = mapped_column(String(200), unique=True, nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     phone: Mapped[str | None] = mapped_column(String(30))
+    # Profile fields (J3)
+    headline: Mapped[str | None] = mapped_column(String(300))
+    location: Mapped[str | None] = mapped_column(String(200))
+    years_experience: Mapped[int | None] = mapped_column(Integer)
+    skills: Mapped[list | None] = mapped_column(ARRAY(String), nullable=True)
+    job_alerts: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, server_default=func.now())

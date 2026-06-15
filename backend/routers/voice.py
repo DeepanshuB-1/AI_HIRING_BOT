@@ -1,6 +1,10 @@
+import asyncio
 import uuid
 import logging
 import html
+import json as _json
+import random
+import time as _time
 from datetime import datetime, date as date_type, time as time_type, timedelta
 from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, Form, HTTPException, Query
@@ -15,10 +19,10 @@ from backend.config import settings
 from backend.models.candidate import Candidate, CandidateStatus
 from backend.models.call import ScreeningCall, CallStatus
 from backend.models.job import Job
-from backend.voice.call_state import init_state, get_state, update_state, append_transcript
+from backend.voice.call_state import init_state, get_state, update_state, append_transcript, set_active_call, clear_active_call
 from backend.voice.tts import synthesize
 from backend.voice.twilio_client import initiate_call
-from backend.services.interview_engine import generate_opening, generate_next_response, generate_followup_probe
+from backend.services.interview_engine import generate_opening, generate_next_response, generate_followup_probe, generate_closing
 from backend.services.deepgram_stt import transcribe_recording
 from backend.tasks import run_report_gen, send_sms_task
 
@@ -34,37 +38,39 @@ def _twiml(content: str) -> Response:
     )
 
 
-def _say(text: str) -> str:
-    """Return a TwiML <Say> or <Play> block (no Gather)."""
-    audio_path = synthesize(text)
+async def _say(text: str, tts_timeout: float = 4.0) -> str:
+    """Return a TwiML <Say> or <Play> block. Hard timeout on ElevenLabs — falls back to Twilio <Say>."""
+    try:
+        audio_path = await asyncio.wait_for(
+            asyncio.to_thread(synthesize, text),
+            timeout=tts_timeout,
+        )
+    except Exception:
+        audio_path = None
     if audio_path:
         return f'<Play>{settings.webhook_base_url}{audio_path}</Play>'
     return f'<Say voice="alice" language="en-IN">{html.escape(text)}</Say>'
 
 
-def _play_or_say(text: str, speech_timeout: str = "5", start_timeout: int = 20) -> str:
+async def _play_or_say(
+    text: str,
+    speech_timeout: str | None = None,
+    start_timeout: int | None = None,
+) -> str:
     """
-    Play AI speech then listen for candidate response.
-    If Deepgram is configured: use <Record> for higher-accuracy transcription.
-    Fallback: Twilio built-in STT via <Gather>.
+    Play AI speech then listen for candidate response via Twilio Gather + Deepgram nova-2.
+    Twilio transcribes inline and posts SpeechResult to /voice/respond — no recording step.
+    speechTimeout defaults to settings.gather_silence_seconds (T1: 5 s fixed silence window).
     """
-    respond_url    = f"{settings.webhook_base_url}/voice/respond"
-    transcribe_url = f"{settings.webhook_base_url}/voice/transcribe"
-    inner = _say(text)
-
-    if settings.deepgram_api_key and settings.twilio_account_sid:
-        # Deepgram path: play audio, then record for accurate transcription
-        return (
-            inner
-            + f'<Record action="{transcribe_url}" method="POST" '
-            f'timeout="{speech_timeout}" maxLength="120" playBeep="false"/>'
-            f'<Redirect method="POST">{respond_url}</Redirect>'
-        )
-    # Fallback: Twilio built-in STT (en-US + phone_call model is still decent)
+    st = speech_timeout if speech_timeout is not None else str(settings.gather_silence_seconds)
+    timeout = start_timeout if start_timeout is not None else settings.gather_start_timeout
+    respond_url = f"{settings.webhook_base_url}/voice/respond"
+    inner = await _say(text)
     return (
         f'<Gather input="speech" action="{respond_url}" method="POST" '
-        f'speechTimeout="{speech_timeout}" timeout="{start_timeout}" '
-        f'language="en-US" enhanced="true" speechModel="phone_call">'
+        f'speechTimeout="{st}" timeout="{timeout}" '
+        f'language="en-IN" speechModel="deepgram_nova-2" '
+        f'hints="python, fastapi, react, sql, docker, internship, machine learning, rest api, java, nodejs">'
         f'{inner}'
         f'</Gather>'
         f'<Redirect method="POST">{respond_url}</Redirect>'
@@ -76,11 +82,13 @@ def _thinking_twiml() -> str:
     TwiML for when candidate asks for time to think.
     Uses <Pause> between <Say> blocks so every ~12s the bot gently reminds
     the candidate it's still listening — without hanging up.
+    Extra patience: silence window = gather_silence_seconds + 1.
     """
     respond_url = f"{settings.webhook_base_url}/voice/respond"
+    st = str(settings.gather_silence_seconds + 1)
     return (
         f'<Gather input="speech" action="{respond_url}" method="POST" '
-        f'speechTimeout="4" timeout="50" language="en-US" enhanced="true" speechModel="phone_call">'
+        f'speechTimeout="{st}" timeout="50" language="en-IN" speechModel="deepgram_nova-2">'
         f'<Say voice="alice" language="en-IN">Of course, take all the time you need. I\'m right here.</Say>'
         f'<Pause length="12"/>'
         f'<Say voice="alice" language="en-IN">Whenever you\'re ready, I\'m listening.</Say>'
@@ -92,6 +100,9 @@ def _thinking_twiml() -> str:
         f'<Redirect method="POST">{respond_url}</Redirect>'
     )
 
+
+# H2: pre-cached neutral backchannels — never evaluative so they can't clash with the grounded ack
+_BACKCHANNELS = ["Mm-hmm.", "Right.", "Okay.", "Got it.", "Alright."]
 
 # Intent keywords
 _REPEAT_KW  = {"repeat", "again", "pardon", "come again", "say that", "catch that",
@@ -351,6 +362,25 @@ async def schedule_slot(
 
     slot_display = slot_dt.strftime("%A, %d %B %Y at %I:%M %p")
     logger.info(f"[consent] {candidate.name} scheduled for {slot_display}")
+
+    # Send confirmation email with .ics calendar invite
+    try:
+        from backend.tasks import send_email_task
+        from backend.notifications.templates import interview_invite_email_html
+        from backend.notifications.ics import build_ics
+        job = await db.get(Job, candidate.jd_id) if candidate.jd_id else None
+        role = job.title if job else "the applied role"
+        consent_url = f"{settings.webhook_base_url}/voice/consent/{candidate.id}"
+        subject, html_body = interview_invite_email_html(candidate.name, role, settings.company_name, consent_url)
+        ics_content = build_ics(
+            summary=f"AI Screening Interview — {role}",
+            slot_dt=slot_dt,
+            description=f"Your AI screening call for {role} at {settings.company_name}. Alex (AI) will call you at this time.",
+        )
+        send_email_task.delay(candidate.email, subject, html_body, ics_attachment=ics_content)
+    except Exception as exc:
+        logger.warning(f"[consent] confirmation email failed: {exc}")
+
     return HTMLResponse(_confirmed_html(candidate.name, slot_display))
 
 
@@ -422,6 +452,16 @@ async def initiate_screening(candidate_id: uuid.UUID, db: AsyncSession = Depends
     subject, html_body = interview_invite_email_html(candidate.name, role, settings.company_name, consent_url)
     send_email_task.delay(candidate.email, subject, html_body)
 
+    # Pre-warm TTS cache for the opening phrase. Twilio takes 2-5 s to place the call,
+    # so by the time /voice/start fires the audio is already cached — no ElevenLabs round-trip
+    # during the live webhook, keeping us well within Twilio's 15 s timeout.
+    try:
+        from backend.voice.tts import synthesize as _tts_warm
+        _opening_preview = generate_opening(candidate.name, role, settings.company_name)
+        asyncio.create_task(asyncio.to_thread(_tts_warm, _opening_preview))
+    except Exception:
+        pass
+
     return {"call_sid": call_sid, "call_id": str(call_record.id), "status": "initiated"}
 
 
@@ -438,46 +478,163 @@ async def voice_start(
     Twilio calls this when the candidate answers.
     Initialises call state in Redis and plays the opening statement.
     """
-    candidate = await db.get(Candidate, uuid.UUID(candidate_id))
-    if not candidate:
-        return _twiml("<Say>Sorry, there was a system error. Goodbye.</Say><Hangup/>")
+    try:
+        candidate = await db.get(Candidate, uuid.UUID(candidate_id))
+        if not candidate:
+            return _twiml("<Say>Sorry, there was a system error. Goodbye.</Say><Hangup/>")
 
-    # update ScreeningCall record
-    result = await db.execute(
-        select(ScreeningCall).where(ScreeningCall.twilio_call_sid == CallSid)
+        # update ScreeningCall record
+        result = await db.execute(
+            select(ScreeningCall).where(ScreeningCall.twilio_call_sid == CallSid)
+        )
+        call = result.scalar_one_or_none()
+        if call:
+            call.call_started_at = datetime.utcnow()
+            call.status = CallStatus.in_progress
+        else:
+            logger.error(f"[voice_start] No ScreeningCall found for CallSid={CallSid} — report will be skipped")
+
+        candidate.status = CandidateStatus.in_call
+
+        job = await db.get(Job, candidate.jd_id)
+        role = job.title if job else "this position"
+        await db.commit()
+
+        questions = candidate.questions_json or []
+
+        init_state(CallSid, {
+            "call_id": str(call.id) if call else None,
+            "candidate_id": candidate_id,
+            "candidate_name": candidate.name,
+            "role": role,
+            "company": settings.company_name,
+            "questions": questions,
+            "question_index": 0,
+            "transcript": [],
+            "silence_count": 0,
+            "unclear_count": 0,
+            "recent_openers": [],
+            "opening_done": False,
+        })
+        set_active_call(CallSid)
+
+        try:
+            opening_text = await asyncio.wait_for(
+                asyncio.to_thread(generate_opening, candidate.name, role, settings.company_name),
+                timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            first = candidate.name.split()[0] if candidate.name else "there"
+            opening_text = (
+                f"Hi {first}! I'm Alex, your AI interviewer from {settings.company_name}. "
+                f"I'll be conducting your screening for the {role} position today. "
+                f"Are you ready to begin?"
+            )
+        append_transcript(CallSid, "ai", opening_text)
+        return _twiml(await _play_or_say(opening_text, start_timeout=30))
+    except Exception as exc:
+        logger.error(f"[voice_start] Unhandled error: {exc}", exc_info=True)
+        return _twiml(
+            "<Say voice='alice' language='en-IN'>"
+            "Sorry, a system error occurred. Our team will call you back shortly. Goodbye."
+            "</Say><Hangup/>"
+        )
+
+
+async def _generate_and_cache_reply(call_sid: str, state: dict, new_q_index: int):
+    """H2: Background task — run LLM and cache result in Redis for /voice/continue to pick up."""
+    from backend.redis_client import get_redis
+    try:
+        response_text, is_closing = await asyncio.to_thread(generate_next_response, state)
+        # persist the updated recent_openers that generate_next_response mutated in-place
+        update_state(call_sid, {"recent_openers": state.get("recent_openers", [])})
+        payload = _json.dumps({"text": response_text, "is_closing": is_closing})
+        get_redis().setex(f"reply:{call_sid}:{new_q_index}", 600, payload)
+    except Exception as exc:
+        logger.error(f"[bg_reply] {call_sid} q{new_q_index}: {exc}")
+
+
+async def _generate_and_cache_probe(call_sid: str, state: dict, q_index: int):
+    """H2: Background task — generate follow-up probe and cache in Redis for /voice/continue-probe."""
+    from backend.redis_client import get_redis
+    try:
+        probe_text = await asyncio.to_thread(generate_followup_probe, state, q_index)
+        get_redis().setex(f"probe:{call_sid}:{q_index}", 300, probe_text)
+    except Exception as exc:
+        logger.error(f"[bg_probe] {call_sid} q{q_index}: {exc}")
+
+
+async def _inline_advance(call_sid: str, state: dict, q_index: int, questions: list) -> Response:
+    """
+    Advance to the next question inline — no <Redirect>, no audio file fetching.
+    Uses Twilio <Say> for all mid-interview speech to eliminate ngrok audio-fetch failures.
+    Polls Redis up to 5 s for the background LLM result; falls back to raw question text.
+    """
+    from backend.redis_client import get_redis as _get_redis
+
+    new_q_index = q_index + 1
+    update_state(call_sid, {"question_index": new_q_index})
+    state = get_state(call_sid)
+
+    asyncio.create_task(_generate_and_cache_reply(call_sid, state, new_q_index))
+
+    key = f"reply:{call_sid}:{new_q_index}"
+    response_text: str | None = None
+    is_closing = False
+    _t = _time.monotonic()
+    for _ in range(20):  # 20 × 0.25 s = 5 s max poll
+        raw = _get_redis().get(key)
+        if raw:
+            _get_redis().delete(key)
+            p = _json.loads(raw)
+            response_text, is_closing = p["text"], p["is_closing"]
+            break
+        await asyncio.sleep(0.25)
+    logger.info(f"[inline_advance] {call_sid} q{q_index}→{new_q_index} LLM {_time.monotonic()-_t:.2f}s found={response_text is not None}")
+
+    if response_text is None:
+        # LLM too slow — fall back to raw question text (no warm opener)
+        if new_q_index < len(questions):
+            q = questions[new_q_index]
+            response_text = q.get("question", q) if isinstance(q, dict) else str(q)
+        else:
+            first = state.get("candidate_name", "there").split()[0]
+            response_text = (
+                f"Thank you so much {first}! I really appreciated all your answers today. "
+                f"The team will be in touch within 3 to 5 business days. Best of luck!"
+            )
+            is_closing = True
+
+    append_transcript(call_sid, "ai", response_text)
+
+    # Use <Say> (Twilio built-in TTS) — no audio file fetch, no ngrok dependency,
+    # no second HTTP request. ElevenLabs is reserved for the opening greeting.
+    backchannel_text = random.choice(_BACKCHANNELS)
+    safe_response = html.escape(response_text)
+    safe_backchannel = html.escape(backchannel_text)
+
+    if is_closing:
+        update_state(call_sid, {"interview_completed": True})
+        run_report_gen.delay(call_sid)
+        return _twiml(
+            f'<Say voice="alice" language="en-IN">{safe_backchannel}</Say>'
+            f'<Say voice="alice" language="en-IN">{safe_response}</Say>'
+            f'<Hangup/>'
+        )
+
+    respond_url = f"{settings.webhook_base_url}/voice/respond"
+    return _twiml(
+        f'<Say voice="alice" language="en-IN">{safe_backchannel}</Say>'
+        f'<Gather input="speech" action="{respond_url}" method="POST" '
+        f'speechTimeout="{settings.gather_silence_seconds}" '
+        f'timeout="{settings.gather_start_timeout}" '
+        f'language="en-IN" speechModel="deepgram_nova-2" '
+        f'hints="python, fastapi, react, sql, docker, internship, machine learning, '
+        f'rest api, java, nodejs">'
+        f'<Say voice="alice" language="en-IN">{safe_response}</Say>'
+        f'</Gather>'
+        f'<Redirect method="POST">{respond_url}</Redirect>'
     )
-    call = result.scalar_one_or_none()
-    if call:
-        call.call_started_at = datetime.utcnow()
-        call.status = CallStatus.in_progress
-    else:
-        logger.error(f"[voice_start] No ScreeningCall found for CallSid={CallSid} — report will be skipped")
-
-    candidate.status = CandidateStatus.in_call
-
-    job = await db.get(Job, candidate.jd_id)
-    role = job.title if job else "this position"
-    await db.commit()
-
-    questions = candidate.questions_json or []
-
-    init_state(CallSid, {
-        "call_id": str(call.id) if call else None,
-        "candidate_id": candidate_id,
-        "candidate_name": candidate.name,
-        "role": role,
-        "company": settings.company_name,
-        "questions": questions,
-        "question_index": 0,
-        "transcript": [],
-        "silence_count": 0,
-        "unclear_count": 0,
-    })
-
-    opening_text = generate_opening(candidate.name, role, settings.company_name)
-    append_transcript(CallSid, "ai", opening_text)
-    # Longer start_timeout on opening — candidate may need a moment to respond
-    return _twiml(_play_or_say(opening_text, speech_timeout="3", start_timeout=30))
 
 
 async def _handle_speech(call_sid: str, speech: str) -> Response:
@@ -498,21 +655,57 @@ async def _handle_speech(call_sid: str, speech: str) -> Response:
     else:
         current_q_text = ""
 
-    # ── No speech detected (silence / empty transcript) ──────────────────────
+    # ── No speech detected (T3: 3-tier gentle silence nudges) ────────────────
     if not speech:
         silence_count = state.get("silence_count", 0) + 1
         update_state(call_sid, {"silence_count": silence_count})
-        if silence_count >= 3:
+        if silence_count == 1:
+            msg = "Take your time — I'm listening whenever you're ready."
+            append_transcript(call_sid, "ai", msg)
+            return _twiml(await _play_or_say(msg, start_timeout=25))
+        elif silence_count == 2:
+            msg = "Would you like me to repeat the question?"
+            append_transcript(call_sid, "ai", msg)
+            return _twiml(await _play_or_say(msg, start_timeout=25))
+        else:
             msg = ("I haven't been able to hear you for a while. "
                    "If you'd like to continue please say something now, "
                    "otherwise I'll wrap up — thank you so much for your time.")
             update_state(call_sid, {"silence_count": 0})
-        else:
-            msg = "I didn't catch that — could you speak a little louder or closer to the phone?"
-        append_transcript(call_sid, "ai", msg)
-        return _twiml(_play_or_say(msg))
+            append_transcript(call_sid, "ai", msg)
+            return _twiml(await _play_or_say(msg))
 
     update_state(call_sid, {"silence_count": 0})
+
+    # ── Consent response to opening greeting ─────────────────────────────────
+    # Any speech here means the candidate is ready — skip probe logic entirely
+    # and ask the first real question.
+    if not state.get("opening_done", True):
+        update_state(call_sid, {"opening_done": True})
+        questions = state.get("questions", [])
+        first_name = state.get("candidate_name", "there").split()[0]
+        if not questions:
+            closing = f"Thank you so much {first_name} for your time! We'll be in touch soon."
+            append_transcript(call_sid, "ai", closing)
+            update_state(call_sid, {"interview_completed": True})
+            run_report_gen.delay(call_sid)
+            return _twiml(await _say(closing) + "<Hangup/>")
+        # Read question 0 directly — no LLM, no Redirect, no race condition.
+        # This guarantees a response well within Twilio's 15 s window.
+        first_q = questions[0]
+        first_q_text = first_q.get("question", first_q) if isinstance(first_q, dict) else str(first_q)
+        warm_openers = [
+            f"Perfect, thanks {first_name}! Let's dive right in.",
+            f"Great to hear that, {first_name}! Let's get started.",
+            f"Wonderful! Thanks for making time today. Let's begin.",
+        ]
+        first_msg = f"{random.choice(warm_openers)} {first_q_text}"
+        append_transcript(call_sid, "ai", first_msg)
+        logger.info(f"[_handle_speech] {call_sid} opening_done → asking q0, synthesizing...")
+        _ts = _time.monotonic()
+        result = await _play_or_say(first_msg)
+        logger.info(f"[_handle_speech] {call_sid} q0 TTS done in {_time.monotonic()-_ts:.2f}s")
+        return _twiml(result)
 
     # ── Intent detection ─────────────────────────────────────────────────────
     intent = _detect_intent(speech)
@@ -520,7 +713,7 @@ async def _handle_speech(call_sid: str, speech: str) -> Response:
     if intent == "repeat" and current_q_text:
         msg = f"Sure! Here's the question again: {current_q_text}"
         append_transcript(call_sid, "ai", msg)
-        return _twiml(_play_or_say(msg, speech_timeout="5", start_timeout=30))
+        return _twiml(await _play_or_say(msg, start_timeout=30))
 
     if intent == "think":
         append_transcript(call_sid, "candidate", speech)
@@ -532,37 +725,74 @@ async def _handle_speech(call_sid: str, speech: str) -> Response:
         if unclear_count >= 2:
             update_state(call_sid, {"unclear_count": 0})
             append_transcript(call_sid, "candidate", speech or "[unclear]")
-            update_state(call_sid, {"question_index": q_index + 1})
-            state = get_state(call_sid)
-            response_text, is_closing = generate_next_response(state)
+            # T2: time budget check before advancing
+            started_at = state.get("started_at", _time.time())
+            elapsed = _time.time() - started_at
+            budget_s = settings.max_call_minutes * 60
+            if elapsed > budget_s - settings.wrapup_buffer_seconds:
+                update_state(call_sid, {
+                    "ended_early": True,
+                    "unasked_questions": list(range(q_index + 1, len(questions))),
+                })
+                state = get_state(call_sid)
+                try:
+                    closing_text = await asyncio.wait_for(
+                        asyncio.to_thread(generate_closing, state), timeout=10.0
+                    )
+                except asyncio.TimeoutError:
+                    first = state.get("candidate_name", "there").split()[0]
+                    closing_text = (
+                        f"Thank you so much {first}! I really appreciate your time today. "
+                        f"The {state.get('company', 'our')} HR team will review your screening and be in touch soon. "
+                        f"Best of luck!"
+                    )
+                append_transcript(call_sid, "ai", closing_text)
+                update_state(call_sid, {"interview_completed": True})
+                run_report_gen.delay(call_sid)
+                return _twiml(await _say(closing_text) + "<Hangup/>")
+            return await _inline_advance(call_sid, state, q_index, questions)
         else:
             msg = "I'm sorry, I didn't quite catch that — could you say that again?"
             append_transcript(call_sid, "ai", msg)
-            return _twiml(_play_or_say(msg, speech_timeout="5"))
+            return _twiml(await _play_or_say(msg))
 
     # ── Normal answer — optionally probe, then advance ───────────────────────
     if intent == "answer":
         update_state(call_sid, {"unclear_count": 0})
         append_transcript(call_sid, "candidate", speech)
 
-        probed = state.get("probed_questions", [])
-        if len(speech.split()) < 15 and q_index not in probed:
-            probe_text = generate_followup_probe(state, q_index)
-            append_transcript(call_sid, "ai", probe_text)
-            update_state(call_sid, {"probed_questions": probed + [q_index]})
-            return _twiml(_play_or_say(probe_text, speech_timeout="5", start_timeout=25))
+        started_at = state.get("started_at", _time.time())
+        elapsed = _time.time() - started_at
+        budget_s = settings.max_call_minutes * 60
 
-        update_state(call_sid, {"question_index": q_index + 1})
-        state = get_state(call_sid)
-        response_text, is_closing = generate_next_response(state)
+        # NOTE: probe follow-up questions are disabled for now — routing everything
+        # through /voice/continue to keep a single tested code path.
+        # Re-enable /voice/continue-probe once the base flow is confirmed stable.
 
-    append_transcript(call_sid, "ai", response_text)
+        # T2: time budget check before advancing to next question
+        if elapsed > budget_s - settings.wrapup_buffer_seconds:
+            update_state(call_sid, {
+                "ended_early": True,
+                "unasked_questions": list(range(q_index + 1, len(questions))),
+            })
+            state = get_state(call_sid)
+            try:
+                closing_text = await asyncio.wait_for(
+                    asyncio.to_thread(generate_closing, state), timeout=10.0
+                )
+            except asyncio.TimeoutError:
+                first = state.get("candidate_name", "there").split()[0]
+                closing_text = (
+                    f"Thank you so much {first}! I really appreciate all your answers today. "
+                    f"The {state.get('company', 'our')} HR team will be in touch within 3 to 5 business days. "
+                    f"Best of luck!"
+                )
+            append_transcript(call_sid, "ai", closing_text)
+            update_state(call_sid, {"interview_completed": True})
+            run_report_gen.delay(call_sid)
+            return _twiml(await _say(closing_text) + "<Hangup/>")
 
-    if is_closing:
-        run_report_gen.delay(call_sid)
-        return _twiml(_say(response_text) + "<Hangup/>")
-
-    return _twiml(_play_or_say(response_text, speech_timeout="5", start_timeout=25))
+        return await _inline_advance(call_sid, state, q_index, questions)
 
 
 @router.post("/transcribe")
@@ -573,16 +803,26 @@ async def voice_transcribe(
     RecordingDuration: str = Form(default="0"),
 ):
     """
-    Twilio posts here when a <Record> finishes.
-    Transcribes audio with Deepgram nova-2-phonecall, then runs interview logic.
+    LEGACY — only used if the <Record> path is manually re-enabled.
+    Current flow uses <Gather speechModel=deepgram_nova-2> → /voice/respond instead.
     """
-    speech = ""
-    duration = int(RecordingDuration or "0")
-    if RecordingUrl and duration >= 1:
-        speech = await transcribe_recording(RecordingUrl)
-    speech = speech.strip()[:2000]
-    logger.info(f"[transcribe] CallSid={CallSid} duration={duration}s transcript={speech[:80]!r}")
-    return await _handle_speech(CallSid, speech)
+    try:
+        speech = ""
+        duration = int(RecordingDuration or "0")
+        if RecordingUrl and duration >= 1:
+            speech = await transcribe_recording(RecordingUrl)
+        speech = speech.strip()[:2000]
+        logger.info(f"[transcribe] CallSid={CallSid} duration={duration}s transcript={speech[:80]!r}")
+        return await _handle_speech(CallSid, speech)
+    except Exception as exc:
+        logger.error(f"[voice_transcribe] Unhandled error: {exc}", exc_info=True)
+        respond_url = f"{settings.webhook_base_url}/voice/respond"
+        return _twiml(
+            f'<Say voice="alice" language="en-IN">Sorry, I had a brief issue. Could you say that again?</Say>'
+            f'<Gather input="speech" action="{respond_url}" method="POST" '
+            f'speechTimeout="5" timeout="12" language="en-IN" speechModel="deepgram_nova-2"></Gather>'
+            f'<Redirect method="POST">{respond_url}</Redirect>'
+        )
 
 
 @router.post("/respond")
@@ -591,11 +831,202 @@ async def voice_respond(
     SpeechResult: str = Form(default=""),
 ):
     """
-    Fallback: used when Deepgram is not configured (Twilio built-in STT)
-    or when <Record> fires a <Redirect> due to silence.
+    Primary speech handler — Twilio Gather posts SpeechResult here after each turn.
+    Hard 12-second ceiling guards against Twilio's 15-second webhook timeout.
     """
-    speech = SpeechResult.strip()[:2000]
-    return await _handle_speech(CallSid, speech)
+    _t0 = _time.monotonic()
+    respond_url = f"{settings.webhook_base_url}/voice/respond"
+    try:
+        speech = SpeechResult.strip()[:2000]
+        logger.info(f"[voice_respond] {CallSid} speech={speech[:60]!r}")
+        result = await asyncio.wait_for(_handle_speech(CallSid, speech), timeout=12.0)
+        logger.info(f"[voice_respond] {CallSid} done in {_time.monotonic()-_t0:.2f}s")
+        return result
+    except asyncio.TimeoutError:
+        logger.error(f"[voice_respond] TOTAL TIMEOUT {CallSid} after {_time.monotonic()-_t0:.2f}s — returning fast fallback")
+        return _twiml(
+            f'<Say voice="alice" language="en-IN">Sorry, I need a moment. Could you say that again?</Say>'
+            f'<Gather input="speech" action="{respond_url}" method="POST" '
+            f'speechTimeout="5" timeout="12" language="en-IN" speechModel="deepgram_nova-2"></Gather>'
+            f'<Redirect method="POST">{respond_url}</Redirect>'
+        )
+    except Exception as exc:
+        logger.error(f"[voice_respond] Unhandled error after {_time.monotonic()-_t0:.2f}s: {exc}", exc_info=True)
+        return _twiml(
+            f'<Say voice="alice" language="en-IN">Sorry, I had a brief glitch — could you say that again?</Say>'
+            f'<Gather input="speech" action="{respond_url}" method="POST" '
+            f'speechTimeout="5" timeout="12" language="en-IN" speechModel="deepgram_nova-2"></Gather>'
+            f'<Redirect method="POST">{respond_url}</Redirect>'
+        )
+
+
+@router.post("/continue")
+async def voice_continue(
+    CallSid: str = Form(...),
+):
+    """
+    H2: Plays the background-generated LLM reply.
+    Reads the current question index from Redis call state — no URL Query param needed.
+    Polls Redis up to 4 s; falls back to inline generation (7 s timeout) if not ready.
+    """
+    _t0 = _time.monotonic()
+    try:
+        from backend.redis_client import get_redis
+
+        state = get_state(CallSid)
+        if not state:
+            return _twiml("<Say>Session expired. Thank you for your time. Goodbye.</Say><Hangup/>")
+
+        q_idx = state.get("question_index", 0)
+        key = f"reply:{CallSid}:{q_idx}"
+        payload = None
+
+        for _ in range(16):  # 16 × 0.25 s = 4 s max wait
+            raw = get_redis().get(key)
+            if raw:
+                get_redis().delete(key)
+                payload = _json.loads(raw)
+                break
+            await asyncio.sleep(0.25)
+
+        logger.info(f"[voice_continue] {CallSid} q{q_idx} poll done in {_time.monotonic()-_t0:.2f}s found={payload is not None}")
+
+        respond_url = f"{settings.webhook_base_url}/voice/respond"
+
+        if payload is None:
+            # LLM was slow — generate inline with a 7 s timeout (already 4 s into budget).
+            # Always use <Say> here (skip ElevenLabs) to guarantee < 15 s total.
+            try:
+                response_text, is_closing = await asyncio.wait_for(
+                    asyncio.to_thread(generate_next_response, state),
+                    timeout=7.0,
+                )
+                update_state(CallSid, {"recent_openers": state.get("recent_openers", [])})
+                append_transcript(CallSid, "ai", response_text)
+                logger.info(f"[voice_continue] {CallSid} q{q_idx} inline LLM done in {_time.monotonic()-_t0:.2f}s")
+                if is_closing:
+                    update_state(CallSid, {"interview_completed": True})
+                    run_report_gen.delay(CallSid)
+                    return _twiml(
+                        f'<Say voice="alice" language="en-IN">{html.escape(response_text)}</Say><Hangup/>'
+                    )
+                return _twiml(
+                    f'<Gather input="speech" action="{respond_url}" method="POST" '
+                    f'speechTimeout="{settings.gather_silence_seconds}" '
+                    f'timeout="{settings.gather_start_timeout}" '
+                    f'language="en-IN" speechModel="deepgram_nova-2">'
+                    f'<Say voice="alice" language="en-IN">{html.escape(response_text)}</Say>'
+                    f'</Gather>'
+                    f'<Redirect method="POST">{respond_url}</Redirect>'
+                )
+            except asyncio.TimeoutError:
+                # ~11 s into budget — return raw question via <Say>, no ElevenLabs
+                logger.warning(f"[voice_continue] inline LLM timeout {CallSid} q{q_idx} — raw question")
+                questions = state.get("questions", [])
+                if q_idx < len(questions):
+                    q = questions[q_idx]
+                    raw_q = q.get("question", q) if isinstance(q, dict) else str(q)
+                    append_transcript(CallSid, "ai", raw_q)
+                    return _twiml(
+                        f'<Gather input="speech" action="{respond_url}" method="POST" '
+                        f'speechTimeout="{settings.gather_silence_seconds}" '
+                        f'timeout="{settings.gather_start_timeout}" '
+                        f'language="en-IN" speechModel="deepgram_nova-2">'
+                        f'<Say voice="alice" language="en-IN">{html.escape(raw_q)}</Say>'
+                        f'</Gather>'
+                        f'<Redirect method="POST">{respond_url}</Redirect>'
+                    )
+                else:
+                    first = state.get("candidate_name", "there").split()[0]
+                    closing = (
+                        f"Thank you so much {first}! I really appreciated speaking with you today. "
+                        f"The team will be in touch within 3 to 5 business days. Best of luck!"
+                    )
+                    append_transcript(CallSid, "ai", closing)
+                    update_state(CallSid, {"interview_completed": True})
+                    run_report_gen.delay(CallSid)
+                    return _twiml(
+                        f'<Say voice="alice" language="en-IN">{html.escape(closing)}</Say><Hangup/>'
+                    )
+
+        response_text = payload["text"]
+        is_closing    = payload["is_closing"]
+        append_transcript(CallSid, "ai", response_text)
+        logger.info(f"[voice_continue] {CallSid} q{q_idx} cached reply ready, synthesizing TTS...")
+
+        if is_closing:
+            update_state(CallSid, {"interview_completed": True})
+            run_report_gen.delay(CallSid)
+            return _twiml(await _say(response_text) + "<Hangup/>")
+
+        return _twiml(await _play_or_say(response_text))
+
+    except Exception as exc:
+        logger.error(f"[voice_continue] Unhandled error after {_time.monotonic()-_t0:.2f}s: {exc}", exc_info=True)
+        respond_url = f"{settings.webhook_base_url}/voice/respond"
+        return _twiml(
+            f'<Say voice="alice" language="en-IN">Sorry about that — could you please repeat your last answer?</Say>'
+            f'<Gather input="speech" action="{respond_url}" method="POST" '
+            f'speechTimeout="5" timeout="12" language="en-IN" speechModel="deepgram_nova-2"></Gather>'
+            f'<Redirect method="POST">{respond_url}</Redirect>'
+        )
+
+
+@router.post("/continue-probe")
+async def voice_continue_probe(
+    CallSid: str = Form(...),
+    q_idx: int = Query(...),
+):
+    """H2: Delivers the background-generated follow-up probe question."""
+    _t0 = _time.monotonic()
+    try:
+        from backend.redis_client import get_redis
+        key = f"probe:{CallSid}:{q_idx}"
+        probe_text = None
+
+        for _ in range(12):  # 12 × 0.25 s = 3 s max wait (leaves 12 s headroom for ElevenLabs)
+            raw = get_redis().get(key)
+            if raw:
+                get_redis().delete(key)
+                probe_text = raw.decode()
+                break
+            await asyncio.sleep(0.25)
+
+        logger.info(f"[continue_probe] {CallSid} q{q_idx} poll done in {_time.monotonic()-_t0:.2f}s, found={probe_text is not None}")
+
+        state = get_state(CallSid)
+        if not state:
+            return _twiml("<Say>Session expired. Thank you for your time. Goodbye.</Say><Hangup/>")
+
+        if probe_text is None:
+            # LLM too slow — skip probe and advance to the next question
+            logger.warning(f"[continue_probe] timeout {CallSid} q{q_idx} — skipping probe, advancing")
+            q_index = state.get("question_index", 0)
+            new_q_index = q_index + 1
+            update_state(CallSid, {"question_index": new_q_index})
+            state = get_state(CallSid)
+            _ts = _time.monotonic()
+            filler_audio = await _say(random.choice(_BACKCHANNELS))
+            logger.info(f"[continue_probe] {CallSid} skip-filler done in {_time.monotonic()-_ts:.2f}s")
+            asyncio.create_task(_generate_and_cache_reply(CallSid, state, new_q_index))
+            continue_url = f"{settings.webhook_base_url}/voice/continue"
+            return _twiml(f"{filler_audio}<Redirect method='POST'>{continue_url}</Redirect>")
+
+        append_transcript(CallSid, "ai", probe_text)
+        _ts = _time.monotonic()
+        result = await _play_or_say(probe_text, start_timeout=25)
+        logger.info(f"[continue_probe] {CallSid} probe TTS done in {_time.monotonic()-_ts:.2f}s, total={_time.monotonic()-_t0:.2f}s")
+        return _twiml(result)
+
+    except Exception as exc:
+        logger.error(f"[voice_continue_probe] Unhandled error after {_time.monotonic()-_t0:.2f}s: {exc}", exc_info=True)
+        respond_url = f"{settings.webhook_base_url}/voice/respond"
+        return _twiml(
+            f'<Say voice="alice" language="en-IN">Could you tell me a little more about that?</Say>'
+            f'<Gather input="speech" action="{respond_url}" method="POST" '
+            f'speechTimeout="5" timeout="12" language="en-IN" speechModel="deepgram_nova-2"></Gather>'
+            f'<Redirect method="POST">{respond_url}</Redirect>'
+        )
 
 
 @router.post("/status")
@@ -624,6 +1055,8 @@ async def voice_status(
     if state and state.get("transcript"):
         call.transcript = state["transcript"]
 
+    clear_active_call()
+
     status_lower = call_status_raw.lower()
     if status_lower == "completed":
         call.status = CallStatus.completed
@@ -631,6 +1064,58 @@ async def voice_status(
         call.status = CallStatus.no_answer
     else:
         call.status = CallStatus.failed
+
+    # Detect mid-interview interruption.
+    # Twilio sends "completed" even for webhook-error hangups, so we can't rely on CallStatus.failed.
+    # Instead we use the interview_completed flag written to Redis just before run_report_gen fires.
+    interview_completed = state.get("interview_completed", False) if state else False
+    if state and state.get("transcript") and not interview_completed and call.status != CallStatus.no_answer:
+        candidate = await db.get(Candidate, call.candidate_id)
+        if candidate:
+            job = await db.get(Job, candidate.jd_id) if candidate.jd_id else None
+            role = job.title if job else "the applied role"
+            reschedule_url = f"{settings.webhook_base_url}/voice/consent/{candidate.id}"
+
+            # Reset candidate so scheduler can retry
+            candidate.status = CandidateStatus.scheduled
+
+            # Apology email to candidate
+            from backend.tasks import send_email_task
+            from backend.notifications.templates import call_interrupted_email_html, call_interrupted_hr_email_html
+            subj, html_body = call_interrupted_email_html(
+                candidate.name, role, settings.company_name, reschedule_url
+            )
+            send_email_task.delay(candidate.email, subj, html_body)
+
+            # Alert email to HR
+            hr_subj, hr_html = call_interrupted_hr_email_html(
+                candidate.name, role, settings.company_name, len(state["transcript"])
+            )
+            send_email_task.delay(settings.hr_email, hr_subj, hr_html)
+
+            # HR portal notification (bell icon)
+            from backend.models.notification import HRNotification
+            notif = HRNotification(
+                type="call_interrupted",
+                title=f"Call interrupted — {candidate.name}",
+                message=(
+                    f"{candidate.name}'s screening call for {role} was interrupted after "
+                    f"{len(state['transcript'])} transcript turns. "
+                    f"Their status has been reset to Scheduled for a retry."
+                ),
+                candidate_id=candidate.id,
+            )
+            db.add(notif)
+            logger.warning(
+                f"[voice_status] Call interrupted mid-interview: candidate={candidate.name} "
+                f"transcript_turns={len(state['transcript'])}"
+            )
+
+    # Update candidate status only when interview ran to natural completion
+    if call.status == CallStatus.completed and interview_completed:
+        _done_cand = await db.get(Candidate, call.candidate_id)
+        if _done_cand and _done_cand.status == CandidateStatus.in_call:
+            _done_cand.status = CandidateStatus.pending_review
 
     # retry logic for no-answer / busy — send reschedule SMS, don't auto-dial
     candidate = await db.get(Candidate, call.candidate_id)

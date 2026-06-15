@@ -65,6 +65,18 @@ export const exportCandidatesCSV = (jobId) =>
     window.URL.revokeObjectURL(url)
   })
 
+export const downloadReportPDF = (candidateId, candidateName) =>
+  api.get(`/hr/candidates/${candidateId}/report.pdf`, { responseType: 'blob' }).then(r => {
+    const url = window.URL.createObjectURL(new Blob([r.data], { type: 'application/pdf' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${(candidateName || 'report').replace(/\s+/g, '_')}_report.pdf`
+    a.click()
+    window.URL.revokeObjectURL(url)
+  })
+
+export const getCallRecordingUrl = (callId) => `/hr/calls/${callId}/recording`
+
 // ── Schedule ──────────────────────────────────────────────────────────────────
 export const getSchedule = (date) =>
   api.get('/hr/schedule', { params: date ? { date_str: date } : {} }).then(r => r.data)
@@ -89,3 +101,32 @@ export const portalApply = (jobId, formData) =>
   portalApi.post(`/api/portal/apply/${jobId}`, formData, { headers: { 'Content-Type': 'multipart/form-data' } }).then(r => r.data)
 export const portalMyApplications = () => portalApi.get('/api/portal/my-applications').then(r => r.data)
 export const portalWithdraw = (candidateId) => portalApi.delete(`/api/portal/apply/${candidateId}`).then(r => r.data)
+
+// Saved Jobs (J1)
+export const portalGetSavedJobs = () => portalApi.get('/api/portal/saved-jobs').then(r => r.data)
+export const portalSaveJob = (jobId) => portalApi.post(`/api/portal/saved-jobs/${jobId}`).then(r => r.data)
+export const portalUnsaveJob = (jobId) => portalApi.delete(`/api/portal/saved-jobs/${jobId}`).then(r => r.data)
+
+// Profile (J3)
+export const portalGetProfile = () => portalApi.get('/api/portal/me').then(r => r.data)
+export const portalUpdateProfile = (payload) => portalApi.patch('/api/portal/me', payload).then(r => r.data)
+
+// Match Score (J2)
+export const portalJobMatch = (jobId) => portalApi.get(`/api/portal/jobs/${jobId}/match`).then(r => r.data)
+
+// Similar Jobs (J4)
+export const portalSimilarJobs = (jobId) => portalApi.get(`/api/portal/jobs/${jobId}/similar`).then(r => r.data)
+
+// Recently Viewed (J7)
+export const portalRecordView = (jobId) => portalApi.post(`/api/portal/recently-viewed/${jobId}`).then(r => r.data)
+export const portalRecentlyViewed = () => portalApi.get('/api/portal/recently-viewed').then(r => r.data)
+
+// Password reset
+export const portalForgotPassword = (email) => portalApi.post('/api/portal/auth/forgot-password', { email }).then(r => r.data)
+export const portalResetPassword = (token, new_password) => portalApi.post('/api/portal/auth/reset-password', { token, new_password }).then(r => r.data)
+
+// ── HR Notifications ──────────────────────────────────────────────────────────
+export const getNotifications = () => api.get('/hr/notifications').then(r => r.data)
+export const getUnreadCount = () => api.get('/hr/notifications/unread-count').then(r => r.data)
+export const markNotificationRead = (id) => api.post(`/hr/notifications/${id}/read`).then(r => r.data)
+export const markAllNotificationsRead = () => api.post('/hr/notifications/read-all').then(r => r.data)

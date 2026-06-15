@@ -11,6 +11,19 @@ def generate_report(call_state: dict, profile: dict) -> dict:
         for t in transcript
     )
 
+    # T2: note partial coverage so HR understands if time ran out
+    ended_early     = call_state.get("ended_early", False)
+    questions       = call_state.get("questions", [])
+    unasked         = call_state.get("unasked_questions", [])
+    partial_note    = ""
+    if ended_early and questions:
+        covered = len(questions) - len(unasked)
+        partial_note = (
+            f"\nNote: The interview ended early due to time constraints. "
+            f"{covered} of {len(questions)} planned questions were covered. "
+            f"Score based on available answers only.\n"
+        )
+
     prompt = f"""You are an expert HR analyst. Analyze this interview and produce a comprehensive score report.
 Return ONLY valid JSON with this exact schema:
 {{
@@ -26,7 +39,7 @@ Return ONLY valid JSON with this exact schema:
   "strengths": ["list"],
   "next_round_questions": ["3 follow-up questions for next round"]
 }}
-
+{partial_note}
 Candidate Profile: {profile}
 
 Interview Transcript:

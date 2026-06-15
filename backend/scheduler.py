@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 
 from backend.config import settings
 
@@ -204,6 +205,89 @@ async def warn_upcoming_calls():
             )
 
 
+async def send_daily_job_alerts():
+    """
+    Daily at 08:00 IST: email new job listings to candidates who opted in.
+    Sends jobs posted in the last 25 hours so we don't miss anything.
+    """
+    from sqlalchemy import select
+    from backend.database import AsyncSessionLocal
+    from backend.models.candidate_user import CandidateUser
+    from backend.models.job import Job
+    from backend.notifications.email import send_email
+    from backend.config import settings as cfg
+
+    since = datetime.now(IST).replace(tzinfo=None) - timedelta(hours=25)
+
+    async with AsyncSessionLocal() as db:
+        # New active jobs
+        jobs_result = await db.execute(
+            select(Job).where(Job.is_active.is_(True), Job.created_at >= since).order_by(Job.created_at.desc())
+        )
+        new_jobs = jobs_result.scalars().all()
+        if not new_jobs:
+            logger.info("[job-alerts] No new jobs today — skipping digest")
+            return
+
+        # Candidates who opted in
+        users_result = await db.execute(
+            select(CandidateUser).where(CandidateUser.job_alerts.is_(True))
+        )
+        users = users_result.scalars().all()
+
+    if not users:
+        return
+
+    def _salary(job):
+        if job.salary_min:
+            return f" · ₹{job.salary_min}–{job.salary_max or '?'} LPA"
+        return ""
+
+    jobs_html = "".join(
+        f"""<tr>
+          <td style="padding:12px 0;border-bottom:1px solid #F1F5F9">
+            <a href="{cfg.frontend_url}/portal/jobs/{job.id}"
+               style="font-weight:600;color:#0D9488;text-decoration:none;font-size:15px">{job.title}</a>
+            <div style="color:#94A3B8;font-size:13px;margin-top:4px">
+              {job.company or ''}{' · ' if job.company and job.location else ''}{job.location or ''}
+              {_salary(job)}
+            </div>
+          </td>
+        </tr>"""
+        for job in new_jobs
+    )
+
+    for user in users:
+        first = user.name.split()[0] if user.name else "there"
+        subject = f"{len(new_jobs)} new role{'s' if len(new_jobs) != 1 else ''} posted today"
+        html = f"""
+        <div style="font-family:Inter,sans-serif;max-width:520px;margin:0 auto;padding:32px;background:#fff">
+          <div style="margin-bottom:24px">
+            <span style="font-size:20px;font-weight:700;color:#0F172A">HiringBot</span>
+          </div>
+          <h2 style="color:#0F172A;font-size:20px;margin:0 0 8px">Hi {first}, here's what's new today</h2>
+          <p style="color:#475569;font-size:14px;margin:0 0 24px">
+            {len(new_jobs)} new position{'s' if len(new_jobs) != 1 else ''} just posted — apply in minutes.
+          </p>
+          <table style="width:100%;border-collapse:collapse">{jobs_html}</table>
+          <a href="{cfg.frontend_url}/portal"
+             style="display:inline-block;margin-top:24px;padding:12px 28px;
+                    background:#0D9488;color:#fff;border-radius:999px;font-weight:600;
+                    text-decoration:none;font-size:14px">
+            View all open roles
+          </a>
+          <hr style="border:none;border-top:1px solid #F1F5F9;margin:32px 0" />
+          <p style="color:#94A3B8;font-size:12px">
+            You're receiving this because you enabled job alerts on your
+            <a href="{cfg.frontend_url}/portal/profile" style="color:#0D9488">profile</a>.
+            Update preferences any time.
+          </p>
+        </div>"""
+        send_email(user.email, subject, html)
+
+    logger.info(f"[job-alerts] Sent digest for {len(new_jobs)} jobs to {len(users)} subscriber(s)")
+
+
 def start_scheduler():
     if not settings.scheduler_enabled:
         logger.info("Scheduler disabled via SCHEDULER_ENABLED=false")
@@ -235,6 +319,14 @@ def start_scheduler():
         warn_upcoming_calls,
         IntervalTrigger(minutes=30),
         id="warn_upcoming_calls",
+        replace_existing=True,
+    )
+
+    # Daily job-alert digest at 08:00 IST
+    scheduler.add_job(
+        send_daily_job_alerts,
+        CronTrigger(hour=9, minute=0, timezone="Asia/Kolkata"),
+        id="send_daily_job_alerts",
         replace_existing=True,
     )
 

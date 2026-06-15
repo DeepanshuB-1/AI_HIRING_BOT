@@ -7,3 +7,6 @@ from .job import Job
 from .call import ScreeningCall, CallStatus
 from .report import ScoreReport, AIRecommendation
 from .question_bank import QuestionBank, QuestionType, DifficultyLevel
+from .saved_job import SavedJob
+from .recently_viewed import RecentlyViewed
+from .notification import HRNotification

@@ -1,63 +1,166 @@
 import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { portalMyApplications, portalWithdraw } from '../../api/client'
+import { portalMyApplications, portalWithdraw, portalGetSavedJobs, portalUnsaveJob, portalGetJobs } from '../../api/client'
 import { useCandidateAuth } from '../../contexts/CandidateAuthContext'
+import EmptyState from '../../components/ui/EmptyState'
+import { Skeleton } from '../../components/ui/Skeleton'
+import {
+  FileText, Check, Clock, Star, Eye, CalendarCheck,
+  Phone, CheckCircle, XCircle, AlertCircle, Briefcase, Lightbulb, Bookmark,
+} from 'lucide-react'
 
-const STEPS = ['pending', 'analyzed', 'pending_review', 'scheduled', 'in_call', 'completed']
+// Journey nodes in order
+const JOURNEY = [
+  { key: 'applied',    label: 'Applied',            icon: FileText,     statuses: ['pending'] },
+  { key: 'reviewed',   label: 'AI Resume Review',   icon: Star,         statuses: ['analyzed'] },
+  { key: 'shortlisted',label: 'Shortlisted',         icon: Eye,          statuses: ['pending_review'] },
+  { key: 'scheduled',  label: 'Interview Scheduled', icon: CalendarCheck,statuses: ['scheduled'] },
+  { key: 'in_call',    label: 'Interview Call',      icon: Phone,        statuses: ['in_call'] },
+  { key: 'decision',   label: 'Decision',            icon: CheckCircle,  statuses: ['completed', 'rejected', 'failed'] },
+]
 
-const STATUS_CONFIG = {
-  pending:        { label: 'Under Review',          color: 'bg-slate-100 text-slate-600',     icon: '🔍', desc: 'Your resume is being analyzed by our AI system' },
-  analyzed:       { label: 'Shortlisted',            color: 'bg-blue-100 text-blue-700',       icon: '⭐', desc: 'You\'ve been shortlisted! An AI interview will be scheduled soon' },
-  pending_review: { label: 'HR Review',              color: 'bg-amber-100 text-amber-700',     icon: '👀', desc: 'A recruiter is reviewing your profile' },
-  scheduled:      { label: 'Interview Scheduled',   color: 'bg-violet-100 text-violet-700',   icon: '📅', desc: 'Check your email and phone for interview details' },
-  in_call:        { label: 'Interview In Progress',  color: 'bg-orange-100 text-orange-700',   icon: '📞', desc: 'Your AI interview is happening right now' },
-  completed:      { label: 'Interview Complete',     color: 'bg-green-100 text-green-700',     icon: '✅', desc: 'Interview done! The team will be in touch soon' },
-  rejected:       { label: 'Not Selected',           color: 'bg-red-50 text-red-500',          icon: '📋', desc: 'We\'ll keep your profile for future opportunities' },
-  failed:         { label: 'Processing Error',       color: 'bg-slate-100 text-slate-400',     icon: '⚠️', desc: 'There was a technical issue. Please contact support' },
+const STATUS_DESC = {
+  pending:        'Your resume is being analyzed by our AI system',
+  analyzed:       'You\'ve been shortlisted! An AI interview will be scheduled soon',
+  pending_review: 'A recruiter is reviewing your profile',
+  scheduled:      'Check your email and phone for interview details',
+  in_call:        'Your AI interview is happening right now',
+  completed:      'Interview done! The team will be in touch soon',
+  rejected:       'Thank you for your time — we\'ll keep your profile for future opportunities',
+  failed:         'There was a technical issue. Please contact support',
 }
 
-function ProgressBar({ status }) {
-  if (status === 'rejected' || status === 'failed') return null
-  const idx = STEPS.indexOf(status)
-  if (idx < 0) return null
-  const pct = Math.round(((idx + 1) / STEPS.length) * 100)
+function getJourneyStep(status) {
+  for (let i = 0; i < JOURNEY.length; i++) {
+    if (JOURNEY[i].statuses.includes(status)) return i
+  }
+  return 0
+}
+
+function JourneyTimeline({ app }) {
+  const currentStep = getJourneyStep(app.status)
+  const isRejected  = ['rejected', 'failed'].includes(app.status)
+  const isCompleted = app.status === 'completed'
+
   return (
-    <div className="mt-4">
-      <div className="flex justify-between text-xs text-slate-400 mb-1.5">
-        <span>Application Progress</span>
-        <span>{pct}%</span>
+    <div className="mt-4 relative pl-8">
+      {/* Vertical connector */}
+      <div className="absolute left-3.5 top-0 bottom-0 w-0.5 bg-slate-100" />
+
+      <div className="space-y-3">
+        {JOURNEY.map((node, i) => {
+          const NodeIcon = node.icon
+          const isPast    = i < currentStep
+          const isCurrent = i === currentStep
+          const isFuture  = i > currentStep
+
+          // On rejection/failure, mark remaining nodes as skipped
+          const isSkipped = isRejected && i > currentStep
+
+          let dotClass = ''
+          let lineClass = 'bg-slate-100'
+          let textClass = 'text-ink-faint'
+
+          if (isSkipped) {
+            dotClass = 'bg-slate-100 border-2 border-slate-200'
+          } else if (isPast || (isCompleted && i < JOURNEY.length)) {
+            dotClass = 'bg-port-600 text-white'
+            lineClass = 'bg-port-200'
+            textClass = 'text-ink'
+          } else if (isCurrent && !isRejected) {
+            dotClass = 'bg-port-600 text-white ring-4 ring-port-100'
+            textClass = 'text-ink font-semibold'
+          } else {
+            dotClass = 'bg-slate-100 border-2 border-slate-200 text-slate-400'
+          }
+
+          return (
+            <div key={node.key} className="relative flex items-start gap-3 min-h-[2rem]">
+              {/* Dot */}
+              <div className={`absolute -left-[1.625rem] w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 z-10 ${dotClass}`}>
+                {isPast || (isCompleted && i < JOURNEY.length - 1) ? (
+                  <Check className="w-3 h-3" />
+                ) : (
+                  <NodeIcon className="w-3 h-3" />
+                )}
+              </div>
+
+              {/* Content */}
+              <div className="flex-1 pb-2">
+                <div className={`text-sm font-medium ${textClass} flex items-center gap-2 flex-wrap`}>
+                  {node.label}
+                  {isCurrent && !isRejected && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-pill bg-port-50 text-port-700 animate-pulse">
+                      <Clock className="w-2.5 h-2.5" /> Now
+                    </span>
+                  )}
+                  {node.key === 'scheduled' && app.status === 'scheduled' && app.scheduled_at && (
+                    <span className="text-xs text-port-600 font-medium">{new Date(app.scheduled_at).toLocaleString('en-IN')}</span>
+                  )}
+                </div>
+                {isCurrent && !isRejected && STATUS_DESC[app.status] && (
+                  <p className="text-xs text-ink-faint mt-0.5 leading-relaxed">{STATUS_DESC[app.status]}</p>
+                )}
+                {isCurrent && isRejected && (
+                  <p className="text-xs text-ink-faint mt-0.5">{STATUS_DESC[app.status]}</p>
+                )}
+              </div>
+            </div>
+          )
+        })}
       </div>
-      <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-        <div
-          className="h-full bg-gradient-to-r from-violet-500 to-indigo-500 rounded-full transition-all duration-500"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <div className="flex justify-between mt-1.5">
-        {STEPS.map((s, i) => (
-          <div key={s} className={`text-xs ${i <= idx ? 'text-violet-600 font-medium' : 'text-slate-300'}`}>
-            {i === 0 ? 'Applied' : i === STEPS.length - 1 ? 'Done' : ''}
-          </div>
-        ))}
+    </div>
+  )
+}
+
+function InterviewTipsCard() {
+  return (
+    <div className="mt-3 bg-port-50 rounded-xl p-4 border border-port-100 flex items-start gap-3">
+      <Lightbulb className="w-4 h-4 text-port-600 flex-shrink-0 mt-0.5" />
+      <div>
+        <p className="text-sm font-semibold text-port-800 mb-1">Interview Tips</p>
+        <ul className="text-xs text-port-700 space-y-1">
+          <li>• Find a quiet place with good phone signal</li>
+          <li>• Keep your resume handy for reference</li>
+          <li>• Alex is an AI — you can ask it to repeat a question or give you a moment</li>
+          <li>• Speak clearly; the AI will confirm it heard you before moving on</li>
+        </ul>
       </div>
     </div>
   )
 }
 
 export default function MyApplications() {
-  const { user, logout, ready } = useCandidateAuth()
+  const { user, ready } = useCandidateAuth()
   const navigate = useNavigate()
+  const [tab, setTab] = useState('applications')
   const [apps, setApps] = useState([])
+  const [savedJobs, setSavedJobs] = useState([])
+  const [allJobs, setAllJobs] = useState([])
   const [loading, setLoading] = useState(true)
+  const [expanded, setExpanded] = useState(null)
 
   useEffect(() => {
     if (ready && !user) { navigate('/portal/login', { state: { from: '/portal/applications' } }); return }
     if (user) {
-      portalMyApplications().then(setApps).finally(() => setLoading(false))
+      Promise.all([
+        portalMyApplications(),
+        portalGetSavedJobs().catch(() => ({ saved_job_ids: [] })),
+        portalGetJobs().catch(() => []),
+      ]).then(([appsData, savedData, jobsData]) => {
+        setApps(appsData)
+        if (appsData.length > 0) setExpanded(appsData[0].id)
+        const savedIds = new Set(savedData.saved_job_ids)
+        setSavedJobs(jobsData.filter(j => savedIds.has(j.id)))
+        setAllJobs(jobsData)
+      }).finally(() => setLoading(false))
     }
   }, [user, ready])
 
-  const handleLogout = () => { logout(); navigate('/portal') }
+  const handleUnsave = async (jobId) => {
+    await portalUnsaveJob(jobId).catch(() => {})
+    setSavedJobs(prev => prev.filter(j => j.id !== jobId))
+  }
 
   const handleWithdraw = async (app) => {
     if (!confirm(`Withdraw your application for "${app.job_title}"? This cannot be undone.`)) return
@@ -71,144 +174,164 @@ export default function MyApplications() {
 
   if (!ready) return null
 
+  const statusIcon = (status) => {
+    if (status === 'completed') return <CheckCircle className="w-4 h-4 text-green-600" />
+    if (status === 'rejected')  return <XCircle className="w-4 h-4 text-red-500" />
+    if (status === 'failed')    return <AlertCircle className="w-4 h-4 text-slate-400" />
+    return <Clock className="w-4 h-4 text-port-500 animate-pulse" />
+  }
+
   return (
-    <div className="min-h-screen bg-slate-50">
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-10 shadow-sm">
-        <div className="max-w-3xl mx-auto px-6 py-3 flex items-center justify-between">
-          <Link to="/portal" className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-violet-600 rounded-lg flex items-center justify-center">
-              <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17H3a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v10a2 2 0 01-2 2h-2" />
-              </svg>
-            </div>
-            <span className="font-bold text-slate-900 text-sm">AI Hiring Bot</span>
-          </Link>
-          <div className="flex items-center gap-3">
-            {user && (
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 bg-violet-100 rounded-full flex items-center justify-center">
-                  <span className="text-xs font-bold text-violet-700">{user.name[0].toUpperCase()}</span>
-                </div>
-                <span className="text-sm text-slate-600 font-medium">{user.name.split(' ')[0]}</span>
-              </div>
-            )}
-            <button onClick={handleLogout} className="text-xs text-slate-400 hover:text-red-500 transition-colors">Sign out</button>
-          </div>
+    <div className="max-w-2xl mx-auto space-y-6">
+      {/* Page header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="font-display text-2xl font-bold text-ink">My Activity</h1>
+          <p className="text-ink-soft text-sm mt-0.5">
+            {loading ? '…' : `${apps.length} application${apps.length !== 1 ? 's' : ''} · ${savedJobs.length} saved`}
+          </p>
         </div>
-      </header>
+        <Link to="/portal"
+          className="inline-flex items-center gap-2 text-sm font-semibold bg-port-600 text-white px-4 py-2 rounded-card hover:bg-port-700 transition-colors shadow-sm">
+          <Briefcase className="w-4 h-4" />
+          Browse Jobs
+        </Link>
+      </div>
 
-      <div className="max-w-3xl mx-auto px-6 py-10">
-        {/* Page header */}
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900">My Applications</h1>
-            <p className="text-slate-500 text-sm mt-1">
-              {loading ? '...' : `${apps.length} application${apps.length !== 1 ? 's' : ''}`}
-            </p>
-          </div>
-          <Link to="/portal"
-            className="flex items-center gap-2 text-sm bg-violet-600 text-white px-4 py-2 rounded-xl hover:bg-violet-700 font-medium shadow-sm transition-colors">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-            </svg>
-            Browse Jobs
-          </Link>
+      {/* Segmented control (J1) */}
+      <div className="flex gap-1 bg-slate-100 rounded-xl p-1 w-fit">
+        {[
+          { key: 'applications', label: 'Applications', count: apps.length },
+          { key: 'saved',        label: 'Saved',        count: savedJobs.length },
+        ].map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)}
+            className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-semibold transition-all ${
+              tab === t.key ? 'bg-white text-ink shadow-sm' : 'text-ink-soft hover:text-ink'
+            }`}>
+            {t.label}
+            <span className={`text-xs px-1.5 py-0.5 rounded-pill font-bold ${
+              tab === t.key ? 'bg-port-50 text-port-700' : 'text-ink-faint'
+            }`}>{t.count}</span>
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div className="space-y-3">
+          {[1,2].map(i => <Skeleton key={i} className="h-32 rounded-card" />)}
         </div>
-
-        {loading ? (
-          <div className="space-y-4">
-            {[1,2].map(i => <div key={i} className="bg-white rounded-2xl p-6 border border-slate-100 animate-pulse h-36" />)}
-          </div>
-        ) : apps.length === 0 ? (
-          <div className="bg-white rounded-2xl p-16 text-center border border-slate-100 shadow-sm">
-            <div className="w-20 h-20 bg-violet-50 rounded-full flex items-center justify-center mx-auto mb-5">
-              <svg className="w-10 h-10 text-violet-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-            </div>
-            <p className="text-slate-700 font-semibold text-lg mb-1">No applications yet</p>
-            <p className="text-slate-400 text-sm mb-6">Browse open positions and submit your first application</p>
-            <Link to="/portal"
-              className="inline-flex items-center gap-2 bg-violet-600 text-white px-6 py-2.5 rounded-xl hover:bg-violet-700 font-medium text-sm shadow-sm transition-colors">
-              Browse Open Positions
-            </Link>
+      ) : tab === 'saved' ? (
+        savedJobs.length === 0 ? (
+          <div className="bg-white rounded-card shadow-card border border-slate-100">
+            <EmptyState
+              icon={Bookmark}
+              title="No saved jobs"
+              hint="Bookmark jobs from the job board to find them here"
+              tone="port"
+            />
           </div>
         ) : (
-          <div className="space-y-4">
-            {apps.map(app => {
-              const cfg = STATUS_CONFIG[app.status] || { label: app.status, color: 'bg-slate-100 text-slate-600', icon: '•', desc: '' }
-              return (
-                <div key={app.id} className="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-                  <div className="flex items-start justify-between gap-4 flex-wrap">
-                    <div className="flex-1 min-w-0">
-                      <h3 className="font-bold text-slate-900 text-lg leading-tight">{app.job_title}</h3>
-                      <div className="flex flex-wrap items-center gap-2 text-sm text-slate-500 mt-1">
-                        {app.company && (
-                          <span className="font-medium text-slate-700">{app.company}</span>
-                        )}
-                        {app.location && (
-                          <span className="flex items-center gap-0.5">
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                            </svg>
-                            {app.location}
-                          </span>
-                        )}
-                        <span className="text-slate-300">·</span>
-                        <span>Applied {new Date(app.applied_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+          <div className="space-y-3">
+            {savedJobs.map(job => (
+              <div key={job.id} className="bg-white rounded-card shadow-card border border-slate-100 p-4 flex items-center gap-4">
+                <div className="flex-1 min-w-0">
+                  <Link to={`/portal/jobs/${job.id}`}
+                    className="text-sm font-bold text-ink hover:text-port-600 transition-colors">{job.title}</Link>
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-ink-soft mt-0.5">
+                    {job.company && <span className="font-medium">{job.company}</span>}
+                    {job.location && <span>{job.location}</span>}
+                    {job.salary_min && <span className="text-green-600 font-medium">₹{job.salary_min}–{job.salary_max || '?'} LPA</span>}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <Link to={`/portal/jobs/${job.id}`}
+                    className="text-xs bg-port-600 text-white px-3 py-1.5 rounded-card font-semibold hover:bg-port-700 transition-colors">
+                    Apply
+                  </Link>
+                  <button onClick={() => handleUnsave(job.id)}
+                    className="p-1.5 text-port-600 hover:bg-red-50 hover:text-red-500 rounded-lg transition-colors"
+                    title="Remove from saved">
+                    <Bookmark className="w-4 h-4 fill-current" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      ) : apps.length === 0 ? (
+        <div className="bg-white rounded-card shadow-card border border-slate-100">
+          <EmptyState
+            icon={FileText}
+            title="No applications yet"
+            hint="Browse open positions and submit your first application"
+            tone="port"
+          />
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {apps.map(app => {
+            const isExpanded = expanded === app.id
+            const canWithdraw = ['pending', 'analyzed', 'pending_review'].includes(app.status)
+
+            return (
+              <div key={app.id} className="bg-white rounded-card shadow-card border border-slate-100 overflow-hidden">
+                {/* Card header */}
+                <button
+                  onClick={() => setExpanded(isExpanded ? null : app.id)}
+                  className="w-full text-left px-5 py-4 hover:bg-slate-50 transition-colors">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-start gap-3">
+                      {statusIcon(app.status)}
+                      <div>
+                        <h3 className="font-bold text-ink leading-tight">{app.job_title}</h3>
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-ink-soft mt-0.5">
+                          {app.company && <span className="font-medium text-ink-soft">{app.company}</span>}
+                          {app.location && <span>{app.location}</span>}
+                          <span>Applied {new Date(app.applied_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                        </div>
                       </div>
                     </div>
-                    <div className="flex flex-col items-end gap-2 flex-shrink-0">
-                      <span className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-semibold ${cfg.color}`}>
-                        <span>{cfg.icon}</span>
-                        {cfg.label}
-                      </span>
+                    <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
                       {app.match_score != null && (
                         <div className="flex items-center gap-1.5">
-                          <div className="w-20 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${app.match_score >= 70 ? 'bg-green-500' : app.match_score >= 45 ? 'bg-amber-400' : 'bg-red-400'}`}
-                              style={{ width: `${app.match_score}%` }}
-                            />
+                          <div className="w-16 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full ${app.match_score >= 70 ? 'bg-green-500' : app.match_score >= 45 ? 'bg-amber-400' : 'bg-red-400'}`}
+                              style={{ width: `${app.match_score}%` }} />
                           </div>
                           <span className={`text-xs font-bold ${app.match_score >= 70 ? 'text-green-600' : app.match_score >= 45 ? 'text-amber-600' : 'text-red-500'}`}>
-                            {app.match_score}% match
+                            {app.match_score}%
                           </span>
                         </div>
                       )}
+                      <span className={`text-[10px] font-medium ${isExpanded ? 'text-port-600' : 'text-ink-faint'}`}>
+                        {isExpanded ? '▲ collapse' : '▼ details'}
+                      </span>
                     </div>
                   </div>
+                </button>
 
-                  {cfg.desc && (
-                    <div className="mt-3 flex items-start gap-2 text-sm text-slate-500 bg-slate-50 rounded-xl px-4 py-2.5">
-                      <svg className="w-4 h-4 text-slate-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      {cfg.desc}
-                    </div>
-                  )}
+                {/* Expandable journey */}
+                {isExpanded && (
+                  <div className="px-5 pb-5 border-t border-slate-50">
+                    <JourneyTimeline app={app} />
 
-                  <ProgressBar status={app.status} />
+                    {app.status === 'scheduled' && <InterviewTipsCard />}
 
-                  {['pending', 'analyzed', 'pending_review'].includes(app.status) && (
-                    <div className="mt-3 flex justify-end">
-                      <button
-                        onClick={() => handleWithdraw(app)}
-                        className="text-xs text-red-500 hover:text-red-700 hover:bg-red-50 px-3 py-1.5 rounded-lg transition-colors font-medium border border-red-100 hover:border-red-200">
-                        Withdraw application
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </div>
-
-      <footer className="border-t border-slate-200 py-6 text-center mt-6">
-        <p className="text-xs text-slate-400">Powered by <span className="font-medium text-violet-600">AI Hiring Bot</span> · Screening interviews are conducted by an AI system</p>
-      </footer>
+                    {canWithdraw && (
+                      <div className="mt-4 flex justify-end">
+                        <button onClick={() => handleWithdraw(app)}
+                          className="text-xs text-ink-faint hover:text-red-500 hover:bg-red-50 px-3 py-1.5 rounded-lg transition-colors border border-slate-200 hover:border-red-200">
+                          Withdraw application
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

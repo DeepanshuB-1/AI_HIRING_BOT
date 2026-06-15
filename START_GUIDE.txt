@@ -80,7 +80,7 @@ STEP 3 — Start Celery: AI Analysis Worker  [Terminal 2]
 
     cd d:\Internship\AI_HIRING_BOT
     .\venv\Scripts\Activate.bat
-    celery -A backend.celery_app worker -Q analysis_queue -c 1 --loglevel=info
+    celery -A backend.celery_app worker -Q analysis_queue -P solo --loglevel=info
 
 This handles: resume parsing, embeddings, JD scoring, question generation,
               interview report generation.
@@ -93,7 +93,7 @@ STEP 4 — Start Celery: Notification Worker  [Terminal 3]
 
     cd d:\Internship\AI_HIRING_BOT
     .\venv\Scripts\Activate.bat
-    celery -A backend.celery_app worker -Q notification_queue -c 2 --loglevel=info
+    celery -A backend.celery_app worker -n notification_worker -Q notification_queue -P solo --loglevel=info
 
 This handles: SendGrid emails, Twilio SMS notifications.
 
@@ -199,6 +199,11 @@ venv not found
   → faster-whisper downloads the Whisper medium model (~769MB) on the very first call
   → Subsequent calls are fast (model stays loaded in memory)
   → To pre-download: python -c "from faster_whisper import WhisperModel; WhisperModel('medium')"
+
+"Application error has occurred" on first voice call
+  → Ollama models weren't loaded in VRAM yet (cold start takes 20-30s, Twilio timeout is 15s)
+  → Fixed: FastAPI now pre-warms both models on startup (you'll see "[warmup] model ready" in logs)
+  → If it still happens: make sure Ollama is running BEFORE starting FastAPI
 
 
 ================================================================================

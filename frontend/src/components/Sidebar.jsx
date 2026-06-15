@@ -1,131 +1,216 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import { useState, useEffect, useRef } from 'react'
+import {
+  LayoutDashboard, Briefcase, Users, CalendarClock,
+  Search, BarChart3, Bot, LogOut, ExternalLink, Bell, X, AlertTriangle,
+} from 'lucide-react'
+import { getNotifications, getUnreadCount, markNotificationRead, markAllNotificationsRead } from '../api/client'
 
 const NAV = [
-  {
-    to: '/', label: 'Dashboard', end: true,
-    icon: (
-      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v2a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zm10-3a1 1 0 011-1h4a1 1 0 011 1v7a1 1 0 01-1 1h-4a1 1 0 01-1-1v-7z" />
-      </svg>
-    ),
-  },
-  {
-    to: '/jobs', label: 'Jobs', end: false,
-    icon: (
-      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-      </svg>
-    ),
-  },
-  {
-    to: '/candidates', label: 'Candidates', end: false,
-    icon: (
-      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
-      </svg>
-    ),
-  },
-  {
-    to: '/schedule', label: 'Schedule', end: false,
-    icon: (
-      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-      </svg>
-    ),
-  },
-  {
-    to: '/search', label: 'AI Search', end: false,
-    icon: (
-      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-      </svg>
-    ),
-  },
-  {
-    to: '/analytics', label: 'Analytics', end: false,
-    icon: (
-      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-      </svg>
-    ),
-  },
+  { to: '/',          label: 'Dashboard',  end: true,  Icon: LayoutDashboard },
+  { to: '/jobs',      label: 'Jobs',       end: false, Icon: Briefcase },
+  { to: '/candidates',label: 'Candidates', end: false, Icon: Users },
+  { to: '/schedule',  label: 'Schedule',   end: false, Icon: CalendarClock },
+  { to: '/search',    label: 'AI Search',  end: false, Icon: Search },
+  { to: '/analytics', label: 'Analytics',  end: false, Icon: BarChart3 },
 ]
+
+function NotificationPanel({ onClose }) {
+  const [notifications, setNotifications] = useState([])
+  const [loading, setLoading] = useState(true)
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    getNotifications()
+      .then(setNotifications)
+      .finally(() => setLoading(false))
+  }, [])
+
+  const handleRead = async (notif) => {
+    if (!notif.read) {
+      await markNotificationRead(notif.id)
+      setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, read: true } : n))
+    }
+    if (notif.candidate_id) {
+      navigate(`/candidates/${notif.candidate_id}`)
+      onClose()
+    }
+  }
+
+  const handleReadAll = async () => {
+    await markAllNotificationsRead()
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })))
+  }
+
+  const unread = notifications.filter(n => !n.read).length
+
+  return (
+    <div className="absolute left-full top-0 ml-2 w-80 bg-slate-800 border border-white/10 rounded-xl shadow-2xl z-50 overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+        <span className="text-white font-semibold text-sm">Notifications</span>
+        <div className="flex items-center gap-2">
+          {unread > 0 && (
+            <button onClick={handleReadAll} className="text-xs text-brand-400 hover:text-brand-300">
+              Mark all read
+            </button>
+          )}
+          <button onClick={onClose} className="text-slate-400 hover:text-white">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      <div className="max-h-96 overflow-y-auto">
+        {loading && (
+          <div className="px-4 py-6 text-slate-400 text-sm text-center">Loading…</div>
+        )}
+        {!loading && notifications.length === 0 && (
+          <div className="px-4 py-6 text-slate-400 text-sm text-center">No notifications</div>
+        )}
+        {!loading && notifications.map(n => (
+          <button
+            key={n.id}
+            onClick={() => handleRead(n)}
+            className={`w-full text-left px-4 py-3 border-b border-white/5 hover:bg-white/5 transition-colors ${
+              !n.read ? 'bg-white/[0.03]' : ''
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <div className={`mt-0.5 flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center ${
+                n.type === 'call_interrupted' ? 'bg-orange-500/20' : 'bg-brand-500/20'
+              }`}>
+                <AlertTriangle className={`w-3.5 h-3.5 ${
+                  n.type === 'call_interrupted' ? 'text-orange-400' : 'text-brand-400'
+                }`} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <p className="text-white text-xs font-semibold truncate">{n.title}</p>
+                  {!n.read && <span className="w-1.5 h-1.5 bg-orange-400 rounded-full flex-shrink-0" />}
+                </div>
+                <p className="text-slate-400 text-xs mt-0.5 line-clamp-2">{n.message}</p>
+                <p className="text-slate-500 text-xs mt-1">
+                  {new Date(n.created_at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}
+                </p>
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 export default function Sidebar() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
+  const [unreadCount, setUnreadCount] = useState(0)
+  const [panelOpen, setPanelOpen] = useState(false)
+  const bellRef = useRef(null)
+
+  useEffect(() => {
+    const fetchCount = () => getUnreadCount().then(d => setUnreadCount(d.count)).catch(() => {})
+    fetchCount()
+    const interval = setInterval(fetchCount, 30000) // poll every 30s
+    return () => clearInterval(interval)
+  }, [])
+
+  // Close panel on outside click
+  useEffect(() => {
+    if (!panelOpen) return
+    const handler = (e) => {
+      if (bellRef.current && !bellRef.current.contains(e.target)) {
+        setPanelOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [panelOpen])
 
   return (
-    <aside className="w-60 min-h-screen bg-slate-900 flex flex-col flex-shrink-0">
-      {/* Logo */}
-      <div className="px-5 py-5 border-b border-slate-800">
+    <aside className="w-60 min-h-screen bg-sidebar flex flex-col flex-shrink-0">
+      {/* Brand row */}
+      <div className="px-5 py-5 border-b border-white/10">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-indigo-500 rounded-lg flex items-center justify-center flex-shrink-0">
-            <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17H3a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v10a2 2 0 01-2 2h-2" />
-            </svg>
+          <div className="w-8 h-8 bg-brand-500 rounded-lg flex items-center justify-center flex-shrink-0">
+            <Bot className="w-4 h-4 text-white" />
           </div>
-          <div>
-            <div className="text-white font-bold text-sm leading-tight">AI Hiring Bot</div>
-            <div className="text-slate-400 text-xs">HR Dashboard</div>
-          </div>
+          <span className="font-display font-bold text-white text-sm tracking-tight">HiringBot</span>
         </div>
       </div>
 
-      {/* User info */}
-      {user && (
-        <div className="px-4 pt-4 pb-2">
-          <div className="flex items-center gap-3 bg-slate-800 rounded-xl px-3 py-2.5">
-            <div className="w-8 h-8 bg-indigo-500 rounded-full flex items-center justify-center flex-shrink-0">
-              <span className="text-white text-xs font-bold">{user.name?.[0]?.toUpperCase()}</span>
-            </div>
-            <div className="min-w-0">
-              <div className="text-white text-xs font-semibold truncate">{user.name}</div>
-              <div className="text-slate-400 text-xs truncate">{user.company_name}</div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Nav */}
-      <nav className="flex-1 px-3 py-3 space-y-0.5">
-        {NAV.map(({ to, icon, label, end }) => (
+      <nav className="flex-1 px-3 py-4 space-y-0.5">
+        {NAV.map(({ to, Icon, label, end }) => (
           <NavLink
             key={to} to={to} end={end}
             className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+              `relative flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
                 isActive
-                  ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-900'
-                  : 'text-slate-400 hover:bg-slate-800 hover:text-slate-100'
+                  ? 'bg-brand-500/20 text-white before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2 before:h-5 before:w-[3px] before:rounded-r-full before:bg-brand-400'
+                  : 'text-slate-400 hover:bg-white/5 hover:text-white'
               }`
             }
           >
-            {icon}
+            <Icon className="w-4 h-4 flex-shrink-0" />
             {label}
           </NavLink>
         ))}
       </nav>
 
       {/* Footer */}
-      <div className="px-3 pb-4 border-t border-slate-800 pt-3 space-y-0.5">
+      <div className="px-3 pb-4 border-t border-white/10 pt-3 space-y-0.5">
         <a href="/portal" target="_blank" rel="noopener noreferrer"
-          className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:bg-slate-800 hover:text-slate-100 transition-all">
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-          </svg>
+          className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:bg-white/5 hover:text-white transition-all">
+          <ExternalLink className="w-4 h-4" />
           Candidate Portal
         </a>
+
+        {/* Notification bell */}
+        <div ref={bellRef} className="relative">
+          <button
+            onClick={() => setPanelOpen(p => !p)}
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:bg-white/5 hover:text-white transition-all"
+          >
+            <div className="relative">
+              <Bell className="w-4 h-4" />
+              {unreadCount > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 bg-orange-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-0.5">
+                  {unreadCount > 9 ? '9+' : unreadCount}
+                </span>
+              )}
+            </div>
+            Notifications
+          </button>
+          {panelOpen && (
+            <NotificationPanel
+              onClose={() => {
+                setPanelOpen(false)
+                getUnreadCount().then(d => setUnreadCount(d.count)).catch(() => {})
+              }}
+            />
+          )}
+        </div>
+
+        {/* User chip */}
+        {user && (
+          <div className="flex items-center gap-2 px-3 py-2.5 mt-1">
+            <div className="w-7 h-7 bg-brand-500 rounded-full flex items-center justify-center flex-shrink-0">
+              <span className="text-white text-xs font-bold">{user.name?.[0]?.toUpperCase()}</span>
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-white text-xs font-semibold truncate">{user.name}</div>
+              <div className="text-slate-400 text-xs truncate">{user.company_name}</div>
+            </div>
+          </div>
+        )}
+
         <button onClick={() => { logout(); navigate('/login') }}
-          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:bg-red-600/20 hover:text-red-400 transition-all">
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-          </svg>
+          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:bg-red-500/20 hover:text-red-400 transition-all">
+          <LogOut className="w-4 h-4" />
           Sign Out
         </button>
-        <div className="px-3 pt-1">
-          <div className="text-slate-600 text-xs">v3.0 · Ollama + pgvector</div>
-        </div>
       </div>
     </aside>
   )

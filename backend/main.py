@@ -1,4 +1,12 @@
+import asyncio
+import logging
 from contextlib import asynccontextmanager
+
+# Show INFO-level application logs (voice timing, LLM latency, etc.) in the terminal.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s [%(name)s] %(message)s",
+)
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -7,9 +15,63 @@ from pathlib import Path
 from backend.config import settings
 from backend.database import create_tables
 from backend.redis_client import ping_redis
-from backend.routers import hr, voice, auth, portal
+from backend.routers import hr, voice, auth, portal, question_bank
 from backend.scheduler import start_scheduler, stop_scheduler
 import backend.models  # noqa: F401 — ensures all tables are registered before create_all()
+
+logger = logging.getLogger(__name__)
+
+
+async def _warmup_ollama():
+    """Pre-load both Ollama models and pre-synthesize static TTS phrases at startup."""
+    def _do():
+        # Load analysis model
+        from backend.services.ollama_client import _client, ANALYSIS_MODEL
+        try:
+            _client.chat(model=ANALYSIS_MODEL, messages=[{"role": "user", "content": "hello"}],
+                         keep_alive="10m", options={"num_predict": 1})
+            print(f"[warmup] {ANALYSIS_MODEL} ready")
+        except Exception as exc:
+            print(f"[warmup] {ANALYSIS_MODEL} failed: {exc}")
+
+        # Load interview model via ollama_stream_voice (uses keep_alive="30m")
+        from backend.services.ollama_client import ollama_stream_voice
+        try:
+            ollama_stream_voice("hello", max_sentences=1)
+            from backend.services.ollama_client import INTERVIEW_MODEL
+            print(f"[warmup] {INTERVIEW_MODEL} ready (voice path)")
+        except Exception as exc:
+            print(f"[warmup] interview model failed: {exc}")
+
+        # Pre-synthesize static phrases so they are cache hits during calls
+        from backend.voice.tts import synthesize
+        static_phrases = [
+            # existing error / repeat phrases
+            "I didn't catch that — could you speak a little louder or closer to the phone?",
+            "I'm sorry, I didn't quite catch that — could you say that again?",
+            "I haven't been able to hear you for a while. If you'd like to continue please say something now, otherwise I'll wrap up — thank you so much for your time.",
+            "Sure! Here's the question again:",
+            # T3: 3-tier silence nudges
+            "Take your time — I'm listening whenever you're ready.",
+            "Would you like me to repeat the question?",
+            # H2: instant backchannel fillers
+            "Mm-hmm.",
+            "Right.",
+            "Okay.",
+            "Got it.",
+            "Alright.",
+        ]
+        cached = 0
+        for phrase in static_phrases:
+            try:
+                if synthesize(phrase):
+                    cached += 1
+            except Exception:
+                pass
+        if cached:
+            print(f"[warmup] {cached} static TTS phrases cached")
+
+    await asyncio.to_thread(_do)
 
 
 @asynccontextmanager
@@ -21,6 +83,8 @@ async def lifespan(app: FastAPI):
     redis_ok = ping_redis()
     start_scheduler()
     print(f"[startup] DB tables ready | Redis: {'OK' if redis_ok else 'UNREACHABLE'} | Scheduler: {'ON' if settings.scheduler_enabled else 'OFF'}")
+    # Pre-warm models in background so first voice call is fast (avoids Twilio 15s timeout)
+    asyncio.create_task(_warmup_ollama())
     yield
     # shutdown
     stop_scheduler()
@@ -48,6 +112,7 @@ app.mount("/audio", StaticFiles(directory=str(Path(settings.audio_cache_dir))), 
 app.include_router(auth.router)
 app.include_router(portal.router)
 app.include_router(hr.router)
+app.include_router(question_bank.router)
 app.include_router(voice.router)
 
 

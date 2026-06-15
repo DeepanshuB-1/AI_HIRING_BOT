@@ -55,6 +55,9 @@ def _mark_failed(candidate_id: str):
 @celery.task(name="backend.tasks.run_profile_extraction", bind=True, max_retries=2)
 def run_profile_extraction(self, candidate_id: str, resume_path: str):
     """Layer 1+2: Parse resume, extract structured profile, store profile_embedding."""
+    from .voice.call_state import is_call_active
+    if is_call_active():
+        raise self.retry(countdown=120)
     try:
         import uuid
         from .services.resume_parser import extract_resume_text
@@ -91,6 +94,9 @@ def run_profile_extraction(self, candidate_id: str, resume_path: str):
 @celery.task(name="backend.tasks.run_embedding_layer", bind=True, max_retries=2)
 def run_embedding_layer(self, candidate_id: str, resume_path: str, jd_id: str, jd_text: str):
     """Layer 1.5: Generate resume + JD embeddings, store in pgvector."""
+    from .voice.call_state import is_call_active
+    if is_call_active():
+        raise self.retry(countdown=120)
     try:
         import uuid
         from .services.resume_parser import extract_resume_text
@@ -125,6 +131,9 @@ def run_embedding_layer(self, candidate_id: str, resume_path: str, jd_id: str, j
 @celery.task(name="backend.tasks.run_jd_scoring", bind=True, max_retries=2)
 def run_jd_scoring(self, candidate_id: str, jd_text: str):
     """Layer 3: Two-stage scoring — pgvector cosine (40%) + LLM (60%)."""
+    from .voice.call_state import is_call_active
+    if is_call_active():
+        raise self.retry(countdown=120)
     try:
         import uuid
 
@@ -183,9 +192,8 @@ def run_jd_scoring(self, candidate_id: str, jd_text: str):
             send_email_task.delay(result["_email"], subject, html)
 
         else:
-            from .notifications.templates import consent_sms, interview_invite_email_html
+            from .notifications.templates import interview_invite_email_html
             consent_url = f"{_s.webhook_base_url}/voice/consent/{result['_cid']}"
-            send_sms_task.delay(result["_phone"], consent_sms(result["_name"]))
             subject, html = interview_invite_email_html(
                 result["_name"], job_title, _s.company_name, consent_url
             )
@@ -203,6 +211,9 @@ def run_jd_scoring(self, candidate_id: str, jd_text: str):
 @celery.task(name="backend.tasks.run_question_gen", bind=True, max_retries=2)
 def run_question_gen(self, candidate_id: str, jd_id: str, jd_text: str):
     """Layer 4: Generate personalised questions with pgvector deduplication."""
+    from .voice.call_state import is_call_active
+    if is_call_active():
+        raise self.retry(countdown=120)
     try:
         import uuid
 
@@ -316,9 +327,9 @@ def run_report_gen(self, call_sid: str):
 
 
 @celery.task(name="backend.tasks.send_email_task", bind=True, max_retries=3)
-def send_email_task(self, to_email: str, subject: str, html_content: str):
+def send_email_task(self, to_email: str, subject: str, html_content: str, ics_attachment: str | None = None):
     from .notifications.email import send_email
-    success = send_email(to_email, subject, html_content)
+    success = send_email(to_email, subject, html_content, ics_attachment=ics_attachment)
     if not success:
         try:
             raise self.retry(countdown=30)

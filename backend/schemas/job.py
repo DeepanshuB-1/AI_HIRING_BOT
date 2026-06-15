@@ -16,6 +16,8 @@ class JobUpdate(BaseModel):
     auto_reject_threshold: Optional[int] = None
     question_count: Optional[int] = None
     is_active: Optional[bool] = None
+    salary_min: Optional[int] = None
+    salary_max: Optional[int] = None
 
 
 class JobCreate(BaseModel):
@@ -29,6 +31,8 @@ class JobCreate(BaseModel):
     min_experience: int = 0
     auto_reject_threshold: int = 40
     question_count: int = 10
+    salary_min: Optional[int] = None
+    salary_max: Optional[int] = None
 
 
 class JobOut(BaseModel):
@@ -43,6 +47,8 @@ class JobOut(BaseModel):
     auto_reject_threshold: int
     question_count: int
     is_active: bool = True
+    salary_min: Optional[int] = None
+    salary_max: Optional[int] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

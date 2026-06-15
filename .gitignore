@@ -16,6 +16,7 @@ env/
 
 # Environment variables — NEVER commit secrets
 .env
+deepgram.txt
 
 # Database
 *.db

@@ -551,6 +551,67 @@ async def delete_candidate(
     await db.commit()
 
 
+@router.get("/candidates/{candidate_id}/report.pdf")
+async def download_candidate_report_pdf(
+    candidate_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Download a formatted PDF score report for a completed candidate."""
+    from fastapi.responses import Response as _Response
+    from backend.services.pdf_report import build_report_pdf
+
+    candidate = await db.get(Candidate, candidate_id)
+    if not candidate or candidate.hr_user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+
+    result = await db.execute(
+        select(ScreeningCall).where(ScreeningCall.candidate_id == candidate_id)
+        .order_by(ScreeningCall.created_at.desc())
+    )
+    call = result.scalars().first()
+    if not call:
+        raise HTTPException(status_code=404, detail="No screening call found")
+
+    report_result = await db.execute(
+        select(ScoreReport).where(ScoreReport.call_id == call.id)
+    )
+    report = report_result.scalars().first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not generated yet")
+
+    job = await db.get(Job, candidate.jd_id) if candidate.jd_id else None
+
+    candidate_dict = {
+        "name": candidate.name,
+        "email": candidate.email,
+        "phone": candidate.phone or "",
+        "jd_title": job.title if job else "the applied role",
+    }
+    report_dict = {
+        "overall_score":      report.overall_score,
+        "skills_score":       report.skills_score,
+        "experience_score":   report.experience_score,
+        "communication_score": report.communication_score,
+        "culture_fit_score":  report.culture_fit_score,
+        "confidence_score":   report.confidence_score,
+        "ai_recommendation":  report.ai_recommendation.value if report.ai_recommendation else "HOLD",
+        "hr_override":        report.hr_override.value if report.hr_override else None,
+        "ai_reasoning":       report.ai_reasoning or "",
+        "strengths":          report.strengths or [],
+        "red_flags":          report.red_flags or [],
+    }
+    transcript = call.transcript or []
+
+    pdf_bytes = build_report_pdf(candidate_dict, report_dict, transcript)
+    safe_name = candidate.name.replace(" ", "_")
+    return _Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}_report.pdf"'},
+    )
+
+
 @router.get("/candidates/{candidate_id}/report")
 async def get_candidate_report(
     candidate_id: uuid.UUID,
@@ -716,6 +777,44 @@ async def find_similar_candidates(
     ]
 
 
+# ── Call recording proxy (F4) ─────────────────────────────────────────────────
+
+@router.get("/calls/{call_id}/recording")
+async def get_call_recording(
+    call_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Stream a Twilio call recording through the server (auth required — Twilio recordings are private)."""
+    import httpx
+    from fastapi.responses import StreamingResponse as _StreamingResp
+
+    call = await db.get(ScreeningCall, call_id)
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+    candidate = await db.get(Candidate, call.candidate_id)
+    if not candidate or candidate.hr_user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not call.recording_url:
+        raise HTTPException(status_code=404, detail="No recording available for this call")
+
+    async def _stream():
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            async with http.stream(
+                "GET", call.recording_url,
+                auth=(settings.twilio_account_sid, settings.twilio_auth_token),
+                follow_redirects=True,
+            ) as resp:
+                async for chunk in resp.aiter_bytes(chunk_size=8192):
+                    yield chunk
+
+    return _StreamingResp(
+        _stream(),
+        media_type="audio/mpeg",
+        headers={"Content-Disposition": f'inline; filename="call_{call_id}.mp3"'},
+    )
+
+
 # ── Analytics ─────────────────────────────────────────────────────────────────
 
 @router.get("/candidates/export")
@@ -839,3 +938,72 @@ async def get_analytics(
         "jobs": jobs_stats,
         "score_distribution": buckets,
     }
+
+
+# ── HR Notifications ──────────────────────────────────────────────────────────
+
+@router.get("/notifications")
+async def list_notifications(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from backend.models.notification import HRNotification
+    from sqlalchemy import desc
+    result = await db.execute(
+        select(HRNotification).order_by(desc(HRNotification.created_at)).limit(50)
+    )
+    notifications = result.scalars().all()
+    return [
+        {
+            "id": str(n.id),
+            "type": n.type,
+            "title": n.title,
+            "message": n.message,
+            "candidate_id": str(n.candidate_id) if n.candidate_id else None,
+            "read": n.read,
+            "created_at": n.created_at.isoformat(),
+        }
+        for n in notifications
+    ]
+
+
+@router.get("/notifications/unread-count")
+async def unread_count(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from backend.models.notification import HRNotification
+    from sqlalchemy import func
+    result = await db.execute(
+        select(func.count()).where(HRNotification.read == False)
+    )
+    return {"count": result.scalar() or 0}
+
+
+@router.post("/notifications/{notification_id}/read")
+async def mark_read(
+    notification_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from backend.models.notification import HRNotification
+    notif = await db.get(HRNotification, notification_id)
+    if not notif:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    notif.read = True
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/notifications/read-all")
+async def mark_all_read(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from backend.models.notification import HRNotification
+    from sqlalchemy import update
+    await db.execute(
+        update(HRNotification).where(HRNotification.read == False).values(read=True)
+    )
+    await db.commit()
+    return {"ok": True}

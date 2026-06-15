@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { CandidateAuthProvider } from './contexts/CandidateAuthContext'
 import Sidebar from './components/Sidebar'
+import PortalLayout from './components/portal/PortalLayout'
 import Dashboard from './pages/Dashboard'
 import Jobs from './pages/Jobs'
 import Candidates from './pages/Candidates'
@@ -16,15 +17,16 @@ import JobDetail from './pages/portal/JobDetail'
 import CandidateLogin from './pages/portal/CandidateLogin'
 import CandidateRegister from './pages/portal/CandidateRegister'
 import MyApplications from './pages/portal/MyApplications'
+import Profile from './pages/portal/Profile'
 import ForgotPassword from './pages/portal/ForgotPassword'
 import ResetPassword from './pages/portal/ResetPassword'
 
 function ProtectedLayout() {
   const { user, ready } = useAuth()
-  if (!ready) return <div className="min-h-screen flex items-center justify-center text-gray-400">Loading...</div>
+  if (!ready) return <div className="min-h-screen flex items-center justify-center text-ink-faint">Loading...</div>
   if (!user) return <Navigate to="/login" replace />
   return (
-    <div className="flex min-h-screen">
+    <div className="flex min-h-screen bg-canvas-hr">
       <Sidebar />
       <main className="flex-1 min-w-0 overflow-y-auto">
         <Routes>
@@ -53,12 +55,29 @@ export default function App() {
     <BrowserRouter>
       <CandidateAuthProvider>
         <Routes>
-          {/* ── Candidate Portal (no HR auth needed) ── */}
-          <Route path="/portal"                element={<JobBoard />} />
-          <Route path="/portal/jobs/:id"       element={<JobDetail />} />
-          <Route path="/portal/login"          element={<CandidateLogin />} />
-          <Route path="/portal/register"       element={<CandidateRegister />} />
-          <Route path="/portal/applications"    element={<MyApplications />} />
+          {/* ── Candidate Portal — wrapped in PortalLayout ── */}
+          <Route path="/portal" element={
+            <PortalLayout wide>
+              <JobBoard />
+            </PortalLayout>
+          } />
+          <Route path="/portal/jobs/:id" element={
+            <PortalLayout wide>
+              <JobDetail />
+            </PortalLayout>
+          } />
+          <Route path="/portal/applications" element={
+            <PortalLayout>
+              <MyApplications />
+            </PortalLayout>
+          } />
+          <Route path="/portal/profile" element={
+            <PortalLayout>
+              <Profile />
+            </PortalLayout>
+          } />
+          <Route path="/portal/login"           element={<CandidateLogin />} />
+          <Route path="/portal/register"        element={<CandidateRegister />} />
           <Route path="/portal/forgot-password" element={<ForgotPassword />} />
           <Route path="/portal/reset-password"  element={<ResetPassword />} />
 

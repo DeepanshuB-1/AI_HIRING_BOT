@@ -4,11 +4,36 @@
 
 @layer base {
   body {
-    @apply bg-gray-50 text-gray-900;
+    @apply font-sans text-ink;
   }
 }
 
 @layer utilities {
   .scrollbar-hide::-webkit-scrollbar { display: none; }
   .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+
+  .h-display {
+    @apply font-display tracking-tight;
+  }
+}
+
+@layer components {
+  .focus-ring {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2;
+  }
+  .focus-ring-port {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-port-500 focus-visible:ring-offset-2;
+  }
+}
+
+/* Reduced motion: disable pulse and transition animations */
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse,
+  .animate-spin,
+  .transition-all,
+  .transition-colors,
+  .transition-transform {
+    animation: none !important;
+    transition: none !important;
+  }
 }

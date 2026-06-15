@@ -21,15 +21,11 @@ def _get_whisper_model():
         return _whisper_model
 
     from faster_whisper import WhisperModel
-    import torch
 
     model_size = settings.whisper_model_size
-    if torch.cuda.is_available():
-        device, compute = "cuda", "float16"
-        logger.info(f"[whisper] Loading {model_size} on GPU (float16)")
-    else:
-        device, compute = "cpu", "int8"
-        logger.info(f"[whisper] Loading {model_size} on CPU (int8) — first load may take 30s")
+    # Always CPU — zero VRAM contention with Ollama. i9 + 32GB RAM handles small.en fine.
+    device, compute = "cpu", "int8"
+    logger.info(f"[whisper] Loading {model_size} on CPU (int8)")
 
     _whisper_model = WhisperModel(model_size, device=device, compute_type=compute)
     logger.info(f"[whisper] Model ready")
@@ -47,9 +43,9 @@ def _transcribe_whisper(audio_bytes: bytes) -> str:
     try:
         segments, info = model.transcribe(
             tmp_path,
-            beam_size=5,
+            beam_size=1,                  # greedy decoding — 2x faster, negligible accuracy loss
             language="en",
-            vad_filter=True,              # skip silent segments automatically
+            vad_filter=True,
             vad_parameters={"min_silence_duration_ms": 500},
         )
         transcript = " ".join(seg.text.strip() for seg in segments).strip()

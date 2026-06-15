@@ -16,7 +16,30 @@ services:
       timeout: 5s
       retries: 5
 
-  # Redis is intentionally omitted — reuse the already-running container on localhost:6379
+  # Note: if you already have Redis running on localhost:6379, you can skip this service.
+  # The compose file is self-sufficient for a clean-machine setup.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  flower:
+    image: mher/flower:2.0
+    restart: unless-stopped
+    command: celery --broker=redis://redis:6379/0 flower --port=5555
+    ports:
+      - "5555:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
 
 volumes:
   pgdata:

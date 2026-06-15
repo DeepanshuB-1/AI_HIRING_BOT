@@ -39,3 +39,17 @@ async def create_tables():
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
+        # Additive column migrations — safe to run on every startup (IF NOT EXISTS is idempotent)
+        migrations = [
+            # candidate_users: profile fields added in UI redesign
+            "ALTER TABLE candidate_users ADD COLUMN IF NOT EXISTS headline VARCHAR(300)",
+            "ALTER TABLE candidate_users ADD COLUMN IF NOT EXISTS location VARCHAR(200)",
+            "ALTER TABLE candidate_users ADD COLUMN IF NOT EXISTS years_experience INTEGER",
+            "ALTER TABLE candidate_users ADD COLUMN IF NOT EXISTS skills TEXT[]",
+            "ALTER TABLE candidate_users ADD COLUMN IF NOT EXISTS job_alerts BOOLEAN NOT NULL DEFAULT false",
+            # jobs: salary fields
+            "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary_min INTEGER",
+            "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary_max INTEGER",
+        ]
+        for sql in migrations:
+            await conn.execute(text(sql))

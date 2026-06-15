@@ -176,6 +176,57 @@ def shortlist_email_html(name: str, role: str, company: str) -> tuple[str, str]:
     return subject, html
 
 
+def call_interrupted_email_html(name: str, role: str, company: str, reschedule_url: str) -> tuple[str, str]:
+    subject = f"Sorry for the interruption — {role} interview at {company}"
+    html = f"""
+<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:24px">
+  <div style="background:#fff7ed;border-left:4px solid #f97316;padding:16px;border-radius:8px;margin-bottom:20px">
+    <h2 style="color:#c2410c;margin:0">We're Sorry, {_first(name)}</h2>
+  </div>
+  <p>Dear {name},</p>
+  <p>We sincerely apologise — your AI screening call for the <strong>{role}</strong> position at
+  <strong>{company}</strong> was interrupted unexpectedly and ended before it should have.</p>
+  <p><strong>This was entirely on our end, not yours.</strong> We will call you back shortly to
+  complete your screening.</p>
+  <p>In the meantime, you can also rebook a slot at your convenience using the link below:</p>
+  <p style="margin:24px 0">
+    <a href="{reschedule_url}"
+       style="background:#f97316;color:#fff;padding:12px 24px;border-radius:8px;
+              text-decoration:none;font-weight:bold;display:inline-block">
+      Rebook My Interview Slot
+    </a>
+  </p>
+  <p style="color:#6b7280;font-size:12px">Or copy this link: {reschedule_url}</p>
+  <p>We appreciate your patience and look forward to speaking with you soon.</p>
+  <p>Best regards,<br><strong>The {company} Recruitment Team</strong></p>
+</div>"""
+    return subject, html
+
+
+def call_interrupted_hr_email_html(candidate_name: str, role: str, company: str, transcript_turns: int) -> tuple[str, str]:
+    subject = f"[{company}] Call interrupted — {candidate_name} ({role})"
+    html = f"""
+<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:24px">
+  <div style="background:#fef2f2;border-left:4px solid #ef4444;padding:16px;border-radius:8px;margin-bottom:20px">
+    <h2 style="color:#b91c1c;margin:0">Screening Call Interrupted</h2>
+  </div>
+  <p>Hi,</p>
+  <p>The AI screening call for <strong>{candidate_name}</strong> applying for
+  <strong>{role}</strong> at <strong>{company}</strong> was interrupted before completion.</p>
+  <ul>
+    <li><strong>Candidate:</strong> {candidate_name}</li>
+    <li><strong>Role:</strong> {role}</li>
+    <li><strong>Transcript turns recorded:</strong> {transcript_turns}</li>
+    <li><strong>Action taken:</strong> Candidate status reset to Scheduled — the system will retry.</li>
+  </ul>
+  <p>An apology email has been sent to the candidate automatically.</p>
+  <p>You can view the candidate's profile and transcript in the
+  <a href="#">HiringBot dashboard</a>.</p>
+  <p>— HiringBot Notification System</p>
+</div>"""
+    return subject, html
+
+
 def hold_email_html(name: str, role: str, company: str) -> tuple[str, str]:
     subject = f"Your application status — {role} at {company}"
     html = f"""
