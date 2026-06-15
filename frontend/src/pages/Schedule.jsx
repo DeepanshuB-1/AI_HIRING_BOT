@@ -102,7 +102,7 @@ export default function Schedule() {
             </span>
             {isToday && <span className="text-xs text-green-600 font-medium">Live · auto-refreshing</span>}
           </div>
-          <div className="divide-y divide-slate-50">
+          <div className="divide-y divide-slate-50 max-h-[520px] overflow-y-auto">
             {calls.map((c, i) => {
               const nowHHMM = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false })
               const isPast = isToday && c.scheduled_time < nowHHMM

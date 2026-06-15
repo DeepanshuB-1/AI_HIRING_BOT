@@ -64,6 +64,13 @@ export default function Search() {
       </div>
 
       {/* Results */}
+      {!searched && !loading && (
+        <div className="text-center py-16 text-ink-faint">
+          <SearchIcon className="w-10 h-10 mx-auto mb-3 opacity-20" />
+          <p className="text-sm">Type a query above and hit Search to find candidates</p>
+        </div>
+      )}
+
       {searched && (
         <div className="bg-white rounded-card shadow-card border border-slate-100 overflow-hidden">
           <div className="px-5 py-3 bg-slate-50 border-b border-slate-100">

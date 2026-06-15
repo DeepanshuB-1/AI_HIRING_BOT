@@ -196,7 +196,7 @@ export default function Dashboard() {
             <Link to="/schedule" className="text-xs text-brand-600 hover:text-brand-700 font-medium">View all →</Link>
           </div>
           <div className="divide-y divide-slate-50">
-            {schedule?.calls?.length ? schedule.calls.map(c => (
+            {schedule?.calls?.length ? schedule.calls.slice(0, 5).map(c => (
               <div key={c.call_id} className="px-6 py-3.5 flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className="w-7 h-7 bg-slate-100 rounded-full flex items-center justify-center flex-shrink-0">
@@ -213,6 +213,13 @@ export default function Dashboard() {
               <div className="px-6 py-10 text-center">
                 <Minus className="w-5 h-5 text-ink-faint mx-auto mb-2" />
                 <p className="text-sm text-ink-faint">No calls scheduled for today</p>
+              </div>
+            )}
+            {schedule?.calls?.length > 5 && (
+              <div className="px-6 py-3 text-center">
+                <Link to="/schedule" className="text-xs text-brand-600 hover:text-brand-700 font-medium">
+                  +{schedule.calls.length - 5} more — view all →
+                </Link>
               </div>
             )}
           </div>
