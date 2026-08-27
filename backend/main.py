@@ -127,6 +127,10 @@ app.add_middleware(
 )
 
 # serve cached TTS audio files
+# Directory must exist before StaticFiles is constructed — this mount happens at
+# import time, before the lifespan (and its own mkdir) ever runs. audio_cache/ is
+# gitignored generated content, so a fresh checkout (e.g. CI) won't have it yet.
+Path(settings.audio_cache_dir).mkdir(parents=True, exist_ok=True)
 app.mount("/audio", StaticFiles(directory=str(Path(settings.audio_cache_dir))), name="audio")
 
 # routers
