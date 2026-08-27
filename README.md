@@ -22,6 +22,7 @@ An end-to-end AI-powered recruitment platform that automates resume screening, c
 - [Scheduler Jobs](#scheduler-jobs)
 - [API Reference](#api-reference)
 - [Common Issues](#common-issues)
+- [Testing](#testing)
 - [Security Notes](#security-notes)
 
 ---
@@ -350,6 +351,13 @@ QUESTIONS_PER_INTERVIEW=8
 # ── Company ──────────────────────────────────────────────────────────
 COMPANY_NAME=Your Company Name
 HR_EMAIL=you@yourcompany.com   # receives report emails + interruption alerts
+
+# ── Environment ──────────────────────────────────────────────────────
+# "development" (default) is permissive. Set to "production" when deploying:
+# startup then FAILS FAST on a default SECRET_KEY, a placeholder/non-HTTPS
+# WEBHOOK_BASE_URL, or missing Twilio credentials while voice is enabled.
+ENVIRONMENT=development
+VOICE_ENABLED=true             # set false to run with no Twilio credentials
 ```
 
 > **WEBHOOK_BASE_URL** must point to your ngrok URL and must be updated every time you restart ngrok (free tier generates a new URL each session). After updating, restart the FastAPI server.
@@ -856,8 +864,53 @@ celery -A backend.celery_app worker -Q analysis_queue -P solo --loglevel=info
 
 ---
 
+## Testing
+
+The backend suite runs fully offline — Twilio, Ollama, Redis, Celery, SendGrid and the
+database are mocked, so no API keys, Docker or network access are needed.
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q
+```
+
+```powershell
+# Windows, if pytest is not on PATH
+.env\Scripts\python.exe -m pytest -q
+```
+
+Frontend production build:
+
+```bash
+cd frontend && npm ci && npm run build
+```
+
+See **[TESTING.md](TESTING.md)** for the full breakdown of what each test file covers and
+how the external-service isolation works. CI (`.github/workflows/ci.yml`) runs both the
+backend tests and the frontend build on every push and pull request.
+
+---
+
 ## Security Notes
 
+- **Twilio webhooks are signature-validated.** Every Twilio-originated endpoint
+  (`/voice/start`, `/respond`, `/continue`, `/continue-probe`, `/status`, `/transcribe`)
+  verifies the `X-Twilio-Signature` HMAC using `TWILIO_AUTH_TOKEN` and returns 403 on a
+  mismatch, so a third party who discovers your ngrok URL cannot forge call events.
+  Candidate consent pages and HR routes are deliberately excluded.
+- **Manual call initiation requires HR auth.** `POST /voice/initiate/{id}` is
+  authenticated and returns 404 for a candidate belonging to another HR user.
+- **Every HR query is tenant-scoped by `hr_user_id`**, including the raw-SQL vector
+  searches (semantic search, similar-to-hires, clustering) and duplicate detection.
+  Cross-tenant reads return 404 rather than 403 so ownership is not disclosed.
+- **Production config is validated at startup.** With `ENVIRONMENT=production` the app
+  refuses to boot on a default `SECRET_KEY`, a placeholder or non-HTTPS
+  `WEBHOOK_BASE_URL`, or missing Twilio credentials. Error messages name the offending
+  setting and never print its value.
+- **Only one scheduler instance should run in production.** `start_scheduler()` guards
+  against a double start within a process, and call/reminder jobs take a short Redis
+  lock, but the lock is best-effort — run a single web process or set
+  `SCHEDULER_ENABLED=false` on all but one instance.
 - **`.env` is gitignored** and must never be committed. It contains Twilio, ElevenLabs, SendGrid, and database credentials.
 - **`deepgram.txt`** is also gitignored — it stores the Deepgram API key in plain text.
 - JWT tokens expire and are validated on every HR API request.

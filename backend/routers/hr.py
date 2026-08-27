@@ -1,4 +1,5 @@
 import uuid
+import logging
 import shutil
 from pathlib import Path
 from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, File, Form, Query
@@ -25,6 +26,8 @@ from backend.tasks import (
 )
 
 router = APIRouter(prefix="/hr", tags=["HR Admin"])
+
+logger = logging.getLogger(__name__)
 
 
 # ── Jobs ─────────────────────────────────────────────────────────────────────
@@ -89,8 +92,14 @@ async def update_job(
 
 # ── Candidates: upload + list ────────────────────────────────────────────────
 
-async def _check_duplicate(resume_vec: list[float], db: AsyncSession) -> dict | None:
-    """Return the most similar existing candidate if above DUPLICATE_THRESHOLD."""
+async def _check_duplicate(
+    resume_vec: list[float], db: AsyncSession, hr_user_id: uuid.UUID
+) -> dict | None:
+    """
+    Return the most similar existing candidate *owned by this HR user* if above
+    DUPLICATE_THRESHOLD. Scoping by hr_user_id keeps another tenant's name/email
+    from ever reaching the duplicate error message.
+    """
     from backend.services.embedder import vec_to_str
     vec_str = vec_to_str(resume_vec)
     result = await db.execute(
@@ -99,10 +108,11 @@ async def _check_duplicate(resume_vec: list[float], db: AsyncSession) -> dict | 
                    1 - (resume_embedding <=> CAST(:vec AS vector)) AS similarity
             FROM candidates
             WHERE resume_embedding IS NOT NULL
+              AND hr_user_id = CAST(:hr_user_id AS uuid)
             ORDER BY resume_embedding <=> CAST(:vec AS vector)
             LIMIT 1
         """),
-        {"vec": vec_str},
+        {"vec": vec_str, "hr_user_id": str(hr_user_id)},
     )
     row = result.fetchone()
     if row and row.similarity >= settings.duplicate_threshold:
@@ -129,7 +139,8 @@ async def upload_candidate(
         raise HTTPException(status_code=413, detail="Resume file too large (max 10 MB)")
 
     job = await db.get(Job, job_id)
-    if not job:
+    # 404 (not 403) for another tenant's job so ownership is not disclosed.
+    if not job or job.hr_user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Job not found")
 
     upload_path = Path(settings.upload_dir)
@@ -139,23 +150,28 @@ async def upload_candidate(
     with file_path.open("wb") as f:
         shutil.copyfileobj(resume.file, f)
 
-    # quick duplicate check (best-effort — skip if embedding fails)
+    # Quick duplicate check, scoped to this HR user's own candidates.
+    # Text extraction / embedding is best-effort (Ollama may be down); the duplicate
+    # *decision* itself is not swallowed — a raised HTTPException always propagates.
+    resume_vec = None
     try:
         from backend.services.resume_parser import extract_resume_text
         from backend.services.embedder import embed_text
         resume_text = extract_resume_text(str(file_path))
         resume_vec = embed_text(resume_text)
-        dup = await _check_duplicate(resume_vec, db)
+    except Exception as exc:
+        logger.warning("Duplicate pre-check skipped (embedding unavailable): %s", exc)
+
+    if resume_vec is not None:
+        dup = await _check_duplicate(resume_vec, db, current_user.id)
         if dup:
             file_path.unlink(missing_ok=True)
+            # dup is guaranteed to belong to current_user, so echoing the name/email
+            # here cannot leak another tenant's data.
             raise HTTPException(
                 status_code=409,
                 detail=f"Duplicate detected — {dup['similarity']*100:.1f}% similar to {dup['name']} ({dup['email']})",
             )
-    except HTTPException:
-        raise
-    except Exception:
-        pass
 
     candidate = Candidate(
         hr_user_id=current_user.id,
@@ -244,10 +260,11 @@ async def semantic_search(
                    1 - (resume_embedding <=> CAST(:vec AS vector)) AS similarity_score
             FROM candidates
             WHERE resume_embedding IS NOT NULL
+              AND hr_user_id = CAST(:hr_user_id AS uuid)
             ORDER BY resume_embedding <=> CAST(:vec AS vector)
             LIMIT :limit
         """),
-        {"vec": vec_str, "limit": limit},
+        {"vec": vec_str, "limit": limit, "hr_user_id": str(current_user.id)},
     )
     rows = result.fetchall()
     return [
@@ -273,8 +290,10 @@ async def similar_to_hires(
     current_user: User = Depends(get_current_user),
 ):
     """Find pending/reviewed candidates most similar to previously hired candidates."""
+    # Only the optional job filter is templated, and it is a fixed literal — every
+    # user-supplied value is passed as a bound parameter.
     hire_filter = "AND c_hire.jd_id = CAST(:job_id AS uuid)" if job_id else ""
-    params: dict = {"limit": limit}
+    params: dict = {"limit": limit, "hr_user_id": str(current_user.id)}
     if job_id:
         params["job_id"] = str(job_id)
 
@@ -285,6 +304,7 @@ async def similar_to_hires(
                 FROM candidates c_hire
                 WHERE c_hire.status = 'completed'
                   AND c_hire.resume_embedding IS NOT NULL
+                  AND c_hire.hr_user_id = CAST(:hr_user_id AS uuid)
                   {hire_filter}
             )
             SELECT c.id, c.name, c.email, c.phone, c.match_score, c.quick_match_score, c.status,
@@ -293,6 +313,7 @@ async def similar_to_hires(
             WHERE c.status IN ('pending', 'pending_review', 'analyzed')
               AND c.resume_embedding IS NOT NULL
               AND hc.avg_vec IS NOT NULL
+              AND c.hr_user_id = CAST(:hr_user_id AS uuid)
             ORDER BY c.resume_embedding <=> hc.avg_vec
             LIMIT :limit
         """),
@@ -322,16 +343,22 @@ async def cluster_candidates(
     current_user: User = Depends(get_current_user),
 ):
     """K-means clustering of candidates by resume embedding (stdlib only, no ML deps)."""
+    # Verify the job belongs to this HR user before touching any candidate rows.
+    job = await db.get(Job, job_id)
+    if not job or job.hr_user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Job not found")
+
     result = await db.execute(
         text("""
             SELECT id, name, resume_embedding
             FROM candidates
             WHERE jd_id = CAST(:jid AS uuid)
               AND resume_embedding IS NOT NULL
+              AND hr_user_id = CAST(:hr_user_id AS uuid)
             ORDER BY created_at DESC
             LIMIT 200
         """),
-        {"jid": str(job_id)},
+        {"jid": str(job_id), "hr_user_id": str(current_user.id)},
     )
     rows = result.fetchall()
     if not rows:
@@ -950,7 +977,10 @@ async def list_notifications(
     from backend.models.notification import HRNotification
     from sqlalchemy import desc
     result = await db.execute(
-        select(HRNotification).order_by(desc(HRNotification.created_at)).limit(50)
+        select(HRNotification)
+        .where(HRNotification.hr_user_id == current_user.id)
+        .order_by(desc(HRNotification.created_at))
+        .limit(50)
     )
     notifications = result.scalars().all()
     return [
@@ -975,7 +1005,12 @@ async def unread_count(
     from backend.models.notification import HRNotification
     from sqlalchemy import func
     result = await db.execute(
-        select(func.count()).where(HRNotification.read == False)
+        select(func.count())
+        .select_from(HRNotification)
+        .where(
+            HRNotification.hr_user_id == current_user.id,
+            HRNotification.read == False,
+        )
     )
     return {"count": result.scalar() or 0}
 
@@ -988,7 +1023,8 @@ async def mark_read(
 ):
     from backend.models.notification import HRNotification
     notif = await db.get(HRNotification, notification_id)
-    if not notif:
+    # 404 (not 403) for another tenant's notification so existence is not disclosed.
+    if not notif or notif.hr_user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Notification not found")
     notif.read = True
     await db.commit()
@@ -1003,7 +1039,12 @@ async def mark_all_read(
     from backend.models.notification import HRNotification
     from sqlalchemy import update
     await db.execute(
-        update(HRNotification).where(HRNotification.read == False).values(read=True)
+        update(HRNotification)
+        .where(
+            HRNotification.hr_user_id == current_user.id,
+            HRNotification.read == False,
+        )
+        .values(read=True)
     )
     await db.commit()
     return {"ok": True}

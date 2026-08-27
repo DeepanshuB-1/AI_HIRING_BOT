@@ -14,8 +14,11 @@ from sqlalchemy import select, and_
 
 IST = ZoneInfo("Asia/Kolkata")
 
+from backend.auth import get_current_user
 from backend.database import get_db
 from backend.config import settings
+from backend.models.user import User
+from backend.security import verify_twilio_request
 from backend.models.candidate import Candidate, CandidateStatus
 from backend.models.call import ScreeningCall, CallStatus
 from backend.models.job import Job
@@ -387,13 +390,22 @@ async def schedule_slot(
 # ── Manual call trigger (HR dashboard / scheduler) ───────────────────────────
 
 @router.post("/initiate/{candidate_id}")
-async def initiate_screening(candidate_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def initiate_screening(
+    candidate_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
-    Trigger an outbound call for a candidate.
-    Used by HR dashboard and Phase 4 APScheduler.
+    Trigger an outbound call for a candidate. Requires an authenticated HR user who
+    owns the candidate.
+
+    Note: the APScheduler path does NOT go through this endpoint — it calls
+    backend.voice.twilio_client.initiate_call directly, so adding auth here does not
+    affect automatic scheduled calls.
     """
     candidate = await db.get(Candidate, candidate_id)
-    if not candidate:
+    # 404 (not 403) for another tenant's candidate so ownership is not disclosed.
+    if not candidate or candidate.hr_user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Candidate not found")
     if not candidate.consent_given:
         raise HTTPException(status_code=403, detail="Candidate has not given consent yet")
@@ -467,7 +479,7 @@ async def initiate_screening(candidate_id: uuid.UUID, db: AsyncSession = Depends
 
 # ── Twilio webhooks ───────────────────────────────────────────────────────────
 
-@router.post("/start")
+@router.post("/start", dependencies=[Depends(verify_twilio_request)])
 async def voice_start(
     CallSid: str = Form(...),
     candidate_id: str = Query(...),
@@ -795,7 +807,7 @@ async def _handle_speech(call_sid: str, speech: str) -> Response:
         return await _inline_advance(call_sid, state, q_index, questions)
 
 
-@router.post("/transcribe")
+@router.post("/transcribe", dependencies=[Depends(verify_twilio_request)])
 async def voice_transcribe(
     CallSid: str = Form(...),
     RecordingUrl: str = Form(default=""),
@@ -825,7 +837,7 @@ async def voice_transcribe(
         )
 
 
-@router.post("/respond")
+@router.post("/respond", dependencies=[Depends(verify_twilio_request)])
 async def voice_respond(
     CallSid: str = Form(...),
     SpeechResult: str = Form(default=""),
@@ -860,7 +872,7 @@ async def voice_respond(
         )
 
 
-@router.post("/continue")
+@router.post("/continue", dependencies=[Depends(verify_twilio_request)])
 async def voice_continue(
     CallSid: str = Form(...),
 ):
@@ -972,7 +984,7 @@ async def voice_continue(
         )
 
 
-@router.post("/continue-probe")
+@router.post("/continue-probe", dependencies=[Depends(verify_twilio_request)])
 async def voice_continue_probe(
     CallSid: str = Form(...),
     q_idx: int = Query(...),
@@ -1029,7 +1041,7 @@ async def voice_continue_probe(
         )
 
 
-@router.post("/status")
+@router.post("/status", dependencies=[Depends(verify_twilio_request)])
 async def voice_status(
     CallSid: str = Form(...),
     call_status_raw: str = Form(..., alias="CallStatus"),
@@ -1096,6 +1108,7 @@ async def voice_status(
             # HR portal notification (bell icon)
             from backend.models.notification import HRNotification
             notif = HRNotification(
+                hr_user_id=candidate.hr_user_id,
                 type="call_interrupted",
                 title=f"Call interrupted — {candidate.name}",
                 message=(

@@ -9,6 +9,10 @@ class HRNotification(Base):
     __tablename__ = "hr_notifications"
 
     id           = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Owning HR user — every read/write of a notification must be filtered by this.
+    # Nullable so pre-existing rows survive the additive migration; those legacy rows
+    # are simply never returned to anyone.
+    hr_user_id   = Column(UUID(as_uuid=True), nullable=True, index=True)
     type         = Column(String(50), nullable=False)      # e.g. "call_interrupted"
     title        = Column(String(200), nullable=False)
     message      = Column(Text, nullable=False)

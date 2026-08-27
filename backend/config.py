@@ -89,7 +89,67 @@ class Settings(BaseSettings):
     company_name: str = "Our Company"
     hr_email: str = "hr@yourcompany.com"
 
+    # Deployment environment — "development" (default, permissive) or "production"
+    # (startup fails fast on insecure defaults). Set ENVIRONMENT=production when deploying.
+    environment: str = "development"
+    # Set false to run without Twilio configured (disables the prod credential check).
+    voice_enabled: bool = True
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment.strip().lower() in ("production", "prod")
+
+
+# Values that indicate a setting was never customised away from its shipped placeholder.
+_PLACEHOLDER_SECRET_KEYS = {
+    "change-me-in-production",
+    "your_jwt_secret_key_change_this_in_production",
+    "changeme",
+    "secret",
+}
+_PLACEHOLDER_WEBHOOK_FRAGMENTS = ("your-ngrok-url", "your_ngrok", "example.com", "changeme")
+
+
+def validate_production_settings(s: "Settings") -> list[str]:
+    """
+    Return a list of human-readable configuration problems that must be fixed before
+    running in production. Never includes secret values — only the offending setting name.
+    """
+    problems: list[str] = []
+
+    if not s.secret_key or s.secret_key.strip().lower() in _PLACEHOLDER_SECRET_KEYS:
+        problems.append("SECRET_KEY is unset or still the shipped default — generate a random value")
+    elif len(s.secret_key) < 32:
+        problems.append("SECRET_KEY is shorter than 32 characters — use a longer random value")
+
+    webhook = (s.webhook_base_url or "").strip().lower()
+    if not webhook:
+        problems.append("WEBHOOK_BASE_URL is not set")
+    elif any(frag in webhook for frag in _PLACEHOLDER_WEBHOOK_FRAGMENTS):
+        problems.append("WEBHOOK_BASE_URL is still a placeholder — set your real public HTTPS URL")
+    elif not webhook.startswith("https://"):
+        problems.append("WEBHOOK_BASE_URL must use https:// in production")
+
+    if s.voice_enabled:
+        missing = [
+            name
+            for name, value in (
+                ("TWILIO_ACCOUNT_SID", s.twilio_account_sid),
+                ("TWILIO_AUTH_TOKEN", s.twilio_auth_token),
+                ("TWILIO_PHONE_NUMBER", s.twilio_phone_number),
+            )
+            if not (value or "").strip()
+        ]
+        if missing:
+            problems.append(
+                "Voice is enabled but these Twilio settings are missing: "
+                + ", ".join(missing)
+                + " (set VOICE_ENABLED=false to run without voice)"
+            )
+
+    return problems
 
 
 @lru_cache()

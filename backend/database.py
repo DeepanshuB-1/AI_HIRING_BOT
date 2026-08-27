@@ -50,6 +50,13 @@ async def create_tables():
             # jobs: salary fields
             "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary_min INTEGER",
             "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS salary_max INTEGER",
+            # hr_notifications: tenant ownership. Nullable so existing rows survive;
+            # legacy rows with NULL are never returned to any user.
+            "ALTER TABLE hr_notifications ADD COLUMN IF NOT EXISTS hr_user_id UUID",
+            "CREATE INDEX IF NOT EXISTS ix_hr_notifications_hr_user_id "
+            "ON hr_notifications (hr_user_id)",
+            # screening_calls: one-shot pre-call reminder guard
+            "ALTER TABLE screening_calls ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMP",
         ]
         for sql in migrations:
             await conn.execute(text(sql))

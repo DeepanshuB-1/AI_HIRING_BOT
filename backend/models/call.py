@@ -30,6 +30,9 @@ class ScreeningCall(Base):
     recording_url: Mapped[str | None] = mapped_column(Text)
     transcript: Mapped[list | None] = mapped_column(JSONB)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Set once the 30-minute pre-call reminder SMS has been queued, so the scheduler
+    # (which runs every 5 min over a 25-35 min window) never sends a second one.
+    reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime)
     interview_model: Mapped[str] = mapped_column(String(50), default="llama3.1:8b")
     status: Mapped[CallStatus] = mapped_column(SAEnum(CallStatus), default=CallStatus.pending)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, server_default=func.now())

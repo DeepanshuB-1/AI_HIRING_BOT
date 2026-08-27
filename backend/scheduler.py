@@ -1,5 +1,7 @@
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -11,6 +13,46 @@ from backend.config import settings
 logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler(timezone="Asia/Kolkata")
 IST = ZoneInfo("Asia/Kolkata")
+
+# Guards against add_job/start being called twice inside one process (e.g. a double
+# lifespan invocation under --reload), which would double every scheduled job.
+_scheduler_started = False
+
+
+@asynccontextmanager
+async def _job_lock(name: str, ttl_seconds: int = 55):
+    """
+    Best-effort distributed lock so that only one process runs a given scheduled job,
+    even if several app instances are deployed.
+
+    Uses a Redis SET NX EX key. Failure-safe by design: if Redis is unreachable we log
+    and still run the job — a missed call is worse than a rare duplicate, and the
+    single-instance deployment note below remains the real guarantee.
+    Yields True when the job should run, False when another instance holds the lock.
+    """
+    key = f"scheduler:lock:{name}"
+    token = uuid4().hex
+    acquired = False
+    client = None
+    try:
+        from backend.redis_client import get_redis
+        client = get_redis()
+        acquired = bool(client.set(key, token, nx=True, ex=ttl_seconds))
+        if not acquired:
+            logger.debug("[scheduler] %s skipped — lock held by another instance", name)
+        yield acquired
+    except Exception as exc:
+        logger.warning("[scheduler] lock unavailable for %s (%s) — running unlocked", name, exc)
+        yield True
+        return
+    finally:
+        # Only release a lock we still own, so a slow job cannot delete a successor's lock.
+        if acquired and client is not None:
+            try:
+                if client.get(key) in (token, token.encode()):
+                    client.delete(key)
+            except Exception as exc:
+                logger.debug("[scheduler] could not release lock %s: %s", name, exc)
 
 
 async def fire_scheduled_calls():
@@ -31,6 +73,22 @@ async def fire_scheduled_calls():
 
     if not (settings.call_window_start <= current_hour < settings.call_window_end):
         return
+
+    async with _job_lock("fire_scheduled_calls") as acquired:
+        if not acquired:
+            return
+        await _fire_due_calls(now, current_hour, current_minute)
+
+
+async def _fire_due_calls(now: datetime, current_hour: int, current_minute: int) -> None:
+    """Body of fire_scheduled_calls, run only while holding the distributed lock."""
+    from sqlalchemy import select, and_
+    from backend.database import AsyncSessionLocal
+    from backend.models.candidate import Candidate, CandidateStatus
+    from backend.models.call import ScreeningCall, CallStatus
+    from backend.voice.twilio_client import initiate_call
+
+    today = now.date()
 
     async with AsyncSessionLocal() as db:
         # How many calls are currently live?
@@ -140,32 +198,57 @@ async def send_precall_reminders():
     now = datetime.now(IST)
     today = now.date()
 
-    async with AsyncSessionLocal() as db:
-        result = await db.execute(
-            select(ScreeningCall).where(
-                and_(
-                    ScreeningCall.scheduled_date == today,
-                    ScreeningCall.status == CallStatus.pending,
+    async with _job_lock("send_precall_reminders") as acquired:
+        if not acquired:
+            return
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(ScreeningCall).where(
+                    and_(
+                        ScreeningCall.scheduled_date == today,
+                        ScreeningCall.status == CallStatus.pending,
+                        # One reminder per call, ever.
+                        ScreeningCall.reminder_sent_at.is_(None),
+                    )
                 )
             )
-        )
-        for call in result.scalars().all():
-            if not call.scheduled_time:
-                continue
-            call_dt = datetime(today.year, today.month, today.day,
-                               call.scheduled_time.hour, call.scheduled_time.minute, tzinfo=IST)
-            minutes_until = (call_dt - now).total_seconds() / 60
-            if 25 <= minutes_until <= 35:
+            sent = 0
+            for call in result.scalars().all():
+                if not call.scheduled_time:
+                    continue
+                call_dt = datetime(today.year, today.month, today.day,
+                                   call.scheduled_time.hour, call.scheduled_time.minute, tzinfo=IST)
+                minutes_until = (call_dt - now).total_seconds() / 60
+                if not (25 <= minutes_until <= 35):
+                    continue
+
                 candidate = await db.get(Candidate, call.candidate_id)
-                if candidate and candidate.phone:
-                    msg = (
-                        f"Hi {candidate.name.split()[0]}, just a reminder: "
-                        f"your AI interview is in about 30 minutes "
-                        f"({call.scheduled_time.strftime('%H:%M')} IST). "
-                        f"Please be in a quiet place with good phone signal. Good luck!"
-                    )
+                if not candidate or not candidate.phone:
+                    continue
+
+                msg = (
+                    f"Hi {candidate.name.split()[0]}, just a reminder: "
+                    f"your AI interview is in about 30 minutes "
+                    f"({call.scheduled_time.strftime('%H:%M')} IST). "
+                    f"Please be in a quiet place with good phone signal. Good luck!"
+                )
+                try:
                     send_sms_task.delay(candidate.phone, msg)
-                    logger.info(f"[scheduler] Sent pre-call reminder to {candidate.name}")
+                except Exception as exc:
+                    # Leave reminder_sent_at NULL so the next tick retries this call.
+                    logger.error(
+                        "[scheduler] Failed to queue reminder for %s: %s", candidate.name, exc
+                    )
+                    continue
+
+                # Mark sent only after the SMS task was successfully queued.
+                call.reminder_sent_at = datetime.utcnow()
+                sent += 1
+                logger.info(f"[scheduler] Sent pre-call reminder to {candidate.name}")
+
+            if sent:
+                await db.commit()
 
 
 async def warn_upcoming_calls():
@@ -289,8 +372,22 @@ async def send_daily_job_alerts():
 
 
 def start_scheduler():
+    """
+    Start the APScheduler jobs.
+
+    DEPLOYMENT NOTE: only ONE scheduler instance should run in production. Jobs that
+    place calls or send reminders additionally take a short Redis lock (see _job_lock)
+    so an accidental second instance cannot double-fire them, but that lock is
+    best-effort — run a single web process, or set SCHEDULER_ENABLED=false on all but
+    one instance.
+    """
+    global _scheduler_started
+
     if not settings.scheduler_enabled:
         logger.info("Scheduler disabled via SCHEDULER_ENABLED=false")
+        return
+    if _scheduler_started or scheduler.running:
+        logger.warning("[scheduler] start_scheduler() called twice — ignoring second call")
         return
 
     # Check every minute for calls due right now
@@ -331,6 +428,7 @@ def start_scheduler():
     )
 
     scheduler.start()
+    _scheduler_started = True
     logger.info(
         f"[scheduler] Started — time-based mode, fires at exact scheduled minute, "
         f"call window {settings.call_window_start}:00–{settings.call_window_end}:00 IST, "
@@ -339,6 +437,8 @@ def start_scheduler():
 
 
 def stop_scheduler():
+    global _scheduler_started
     if scheduler.running:
         scheduler.shutdown(wait=False)
         logger.info("[scheduler] Stopped")
+    _scheduler_started = False

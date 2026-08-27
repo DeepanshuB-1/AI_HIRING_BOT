@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
-from backend.config import settings
+from backend.config import settings, validate_production_settings
 from backend.database import create_tables
 from backend.redis_client import ping_redis
 from backend.routers import hr, voice, auth, portal, question_bank
@@ -74,9 +74,30 @@ async def _warmup_ollama():
     await asyncio.to_thread(_do)
 
 
+def _enforce_production_config() -> None:
+    """
+    Fail fast on insecure configuration when ENVIRONMENT=production.
+    Only setting *names* are reported — never their values.
+    """
+    problems = validate_production_settings(settings)
+    if not problems:
+        return
+    bullets = "\n".join(f"  - {p}" for p in problems)
+    if settings.is_production:
+        raise RuntimeError(
+            "Refusing to start in production with insecure configuration:\n" + bullets
+        )
+    logger.warning(
+        "Configuration issues detected (allowed because ENVIRONMENT=%s):\n%s",
+        settings.environment,
+        bullets,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # startup
+    _enforce_production_config()
     await create_tables()
     Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
     Path(settings.audio_cache_dir).mkdir(parents=True, exist_ok=True)
