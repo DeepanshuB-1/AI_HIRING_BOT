@@ -1,6 +1,6 @@
 # Core framework
 fastapi==0.115.0
-starlette==0.45.3
+starlette==0.38.6
 uvicorn==0.30.6
 python-multipart==0.0.9
 
@@ -38,6 +38,7 @@ apscheduler==3.10.4
 # Auth & validation
 pydantic==2.10.6
 pydantic-settings==2.6.1
+email-validator==2.3.0
 python-jose==3.3.0
 passlib==1.7.4
 bcrypt==4.0.1
